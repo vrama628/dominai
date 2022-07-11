@@ -1,0 +1,3 @@
+exp-grouping = preserve
+module-item-spacing = preserve
+type-decl = sparse

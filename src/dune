@@ -1,0 +1,14 @@
+(executable
+  (public_name dominai)
+  (name main)
+  (libraries
+    base
+    dream
+    jsonrpc
+    yojson
+    react
+  )
+  (preprocess (pps
+    lwt_ppx
+  ))
+)
