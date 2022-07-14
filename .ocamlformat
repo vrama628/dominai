@@ -1,3 +1,6 @@
 exp-grouping = preserve
 module-item-spacing = preserve
 type-decl = sparse
+indicate-multiline-delimiters = closing-on-separate-line
+parens-tuple = multi-line-only
+break-infix = fit-or-vertical
