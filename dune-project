@@ -9,6 +9,7 @@
     jsonrpc
     yojson
     react
-    ppx_deriving_yojson    
+    ppx_yojson_conv
+    lwt_ppx
   )
 )

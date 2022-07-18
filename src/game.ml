@@ -1,6 +1,7 @@
 open Base
+open Stdio
 
-type card =
+type action_card =
   | Cellar
   | Chapel
   | Moat
@@ -27,10 +28,16 @@ type card =
   | Sentry
   | Witch
   | Artisan
-[@@deriving to_yojson]
+[@@deriving yojson_of, eq]
 
-type game_to_player_notification = GameStart of { kingdom : card list }
-[@@deriving to_yojson]
+(* hack around ppx_yojson_conv's weird json translation of enums *)
+let yojson_of_action_card card =
+  match yojson_of_action_card card with
+  | `List [ name ] -> name
+  | _ -> failwith "unreachable"
+
+type game_to_player_notification = GameStart of { kingdom : action_card list }
+[@@deriving yojson_of]
 
 let json_to_notification = function
   | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
@@ -40,29 +47,37 @@ module Player = struct
   type t =
     string * Dream.websocket (* TODO: add tracking for hand, discard, etc *)
 
+  let equal (a, _) (b, _) = String.equal a b
+
   let notify ((_, websocket) : t) (notification : game_to_player_notification) :
       unit =
     let method_, params =
       notification
-      |> game_to_player_notification_to_yojson
+      |> yojson_of_game_to_player_notification
       |> json_to_notification
     in
     Lwt.async (fun () ->
-        Jsonrpc.Notification.create ~method_ ~params ()
-        |> Jsonrpc.Notification.yojson_of_t
-        |> Yojson.Safe.to_string
-        |> Dream.send websocket
+        try
+          Jsonrpc.Notification.create ~method_ ~params ()
+          |> Jsonrpc.Notification.yojson_of_t
+          |> Yojson.Safe.to_string
+          |> Dream.send websocket
+        with e ->
+          Printf.sprintf "ERROR SENDING %s" (Exn.to_string e)
+          |> print_endline
+          |> Lwt.return
     )
 end
 
 type state =
   | PreStart of { players : Player.t list }
   | InProgress of {
-      kingdom : card list;
+      kingdom : action_card list;
       current_player : Player.t;
       other_player : Player.t;
     }
   | GameOver of { winner : string }
+[@@deriving eq]
 
 type t = {
   state : state React.signal;
@@ -121,7 +136,7 @@ let start (game : t) : unit =
 let create () : t =
   let state, set =
     let players = [] in
-    React.S.create (PreStart { players })
+    React.S.create ~eq:equal_state (PreStart { players })
   in
   let game = { state; set } in
   ignore
