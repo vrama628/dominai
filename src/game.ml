@@ -164,3 +164,5 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) =
         game.set (PreStart { players });
         game_over_promise game
   | _ -> failwith "Game has already started."
+
+let _ = GameOver { winner = "" }
