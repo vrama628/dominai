@@ -28,7 +28,7 @@ type action_card =
   | Sentry
   | Witch
   | Artisan
-[@@deriving yojson_of, eq]
+[@@deriving yojson_of]
 
 (* hack around ppx_yojson_conv's weird json translation of enums *)
 let yojson_of_action_card card =
@@ -46,8 +46,6 @@ let json_to_notification = function
 module Player = struct
   type t =
     string * Dream.websocket (* TODO: add tracking for hand, discard, etc *)
-
-  let equal (a, _) (b, _) = String.equal a b
 
   let notify ((_, websocket) : t) (notification : game_to_player_notification) :
       unit =
@@ -70,14 +68,17 @@ module Player = struct
 end
 
 type state =
-  | PreStart of { players : Player.t list }
+  | PreStart of {
+      game_over_promise : unit Lwt.t;
+      game_over_resolver : unit Lwt.u;
+      players : Player.t list;
+    }
   | InProgress of {
+      game_over_resolver : unit Lwt.u;
       kingdom : action_card list;
       current_player : Player.t;
-      other_player : Player.t;
+      other_players : Player.t list;
     }
-  | GameOver of { winner : string }
-[@@deriving eq]
 
 type t = {
   state : state React.signal;
@@ -121,63 +122,38 @@ let shuffle (list : 'a list) : 'a list =
   in
   List.map ~f:snd sorted
 
-let start (game : t) : unit =
-  let current_player, other_player =
-    match React.S.value game.state with
-    | PreStart { players = [ p1; p2 ] } -> p1, p2
-    | _ -> failwith "unreachable"
+(* PRECONDITION: between 2 and 4 players *)
+let start (game : t) (players : Player.t list) (game_over_resolver : unit Lwt.u)
+    : unit =
+  let current_player, other_players =
+    match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
   in
   let kingdom = List.take (shuffle randomizer_cards) 10 in
-  List.iter [ current_player; other_player ] ~f:(fun player ->
+  List.iter players ~f:(fun player ->
       Player.notify player (GameStart { kingdom })
   );
-  game.set (InProgress { kingdom; current_player; other_player })
+  game.set
+    (InProgress { kingdom; current_player; other_players; game_over_resolver })
 
 let create () : t =
   let state, set =
     let players = [] in
-    React.S.create ~eq:equal_state (PreStart { players })
+    let game_over_promise, game_over_resolver = Lwt.wait () in
+    React.S.create ~eq:phys_equal
+      (PreStart { players; game_over_promise; game_over_resolver })
   in
-  let game = { state; set } in
-  ignore
-    ( React.S.trace
-        (function
-          | PreStart { players = [ _; _ ] } ->
-              (* start the game as soon as two players have connected *)
-              (* alternatively, instead of listening to the signal we could
-               * just trigger this in add_player *)
-              start game
-          | _ -> ()
-          )
-        state
-      : state React.signal
-      );
-  game
-
-(** promise that resoles when the given game is over *)
-let game_over_promise (game : t) =
-  let promise, resolver = Lwt.wait () in
-  ignore
-    ( React.S.trace
-        (function
-          | GameOver _ ->
-              if Lwt.is_sleeping promise then Lwt.wakeup_later resolver ()
-          | _ -> ()
-          )
-        game.state
-      : state React.signal
-      );
-  promise
+  { state; set }
 
 let add_player (game : t) (name : string) (websocket : Dream.websocket) =
   match React.S.value game.state with
-  | PreStart { players } ->
+  | PreStart { players; game_over_promise; game_over_resolver } ->
       if List.Assoc.find players ~equal:String.equal name |> Option.is_some then
         failwith (Printf.sprintf "Player with name %s already exists." name)
       else
         let players = (name, websocket) :: players in
-        game.set (PreStart { players });
-        game_over_promise game
+        if List.length players >= 2 then
+          start game players game_over_resolver
+        else
+          game.set (PreStart { players; game_over_promise; game_over_resolver });
+        game_over_promise
   | _ -> failwith "Game has already started."
-
-let _ = GameOver { winner = "" }
