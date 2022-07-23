@@ -12,5 +12,7 @@
     ppx_yojson_conv
     lwt_ppx
     ppx_sexp_conv
+    stdio
+    ppx_deriving
   )
 )
