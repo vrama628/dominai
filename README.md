@@ -20,7 +20,7 @@ If you have contributions, Pull requests are welcome!
 1. Clone this repository and go to it in your terminal.
 2. Install [opam](https://opam.ocaml.org/doc/Install.html), the package manager
     for OCaml.
-3. Run `opam install . --deps-only` to install this project's dependencies.
+3. Run `opam init` (this may take a few minutes). Then run `opam install . --deps-only` to install this project's dependencies.
 4. Run the server with `dune exec dominai`
 
 You only need to do each of steps 1-3 once; once you've done them you can do
