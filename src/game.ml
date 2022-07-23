@@ -1,65 +1,122 @@
 open Base
 open Stdio
 
-type card =
-  (* TREASURE CARDS *)
-  | Copper
-  | Silver
-  | Gold
-  (* VICTORY CARDS *)
-  | Estate
-  | Duchy
-  | Province
-  | Gardens
-  (* ACTION CARDS *)
-  | Cellar
-  | Chapel
-  | Moat
-  | Harbinger
-  | Merchant
-  | Vassal
-  | Village
-  | Workshop
-  | Bureaucrat
-  | Militia
-  | Moneylender
-  | Poacher
-  | Remodel
-  | Smithy
-  | ThroneRoom
-  | Bandit
-  | CouncilRoom
-  | Festival
-  | Laboratory
-  | Library
-  | Market
-  | Mine
-  | Sentry
-  | Witch
-  | Artisan
-[@@deriving yojson_of]
+module Card = struct
+  type t =
+    (* TREASURE CARDS *)
+    | Copper
+    | Silver
+    | Gold
+    (* VICTORY CARDS *)
+    | Estate
+    | Duchy
+    | Province
+    | Gardens
+    (* CURSE CARD *)
+    | Curse
+    (* ACTION CARDS *)
+    | Cellar
+    | Chapel
+    | Moat
+    | Harbinger
+    | Merchant
+    | Vassal
+    | Village
+    | Workshop
+    | Bureaucrat
+    | Militia
+    | Moneylender
+    | Poacher
+    | Remodel
+    | Smithy
+    | ThroneRoom
+    | Bandit
+    | CouncilRoom
+    | Festival
+    | Laboratory
+    | Library
+    | Market
+    | Mine
+    | Sentry
+    | Witch
+    | Artisan
+  [@@deriving yojson_of, ord, sexp]
 
-(* hack around ppx_yojson_conv's weird json translation of enums *)
-let yojson_of_card card =
-  match yojson_of_card card with
-  | `List [ name ] -> name
-  | _ -> failwith "unreachable"
+  (* hack around ppx_yojson_conv's weird json translation of enums *)
+  let yojson_of_t card =
+    match yojson_of_t card with
+    | `List [ name ] -> name
+    | _ -> failwith "unreachable"
+end
 
-type game_to_player_notification = StartGame of { kingdom : card list }
-[@@deriving yojson_of]
+module CardComparator = struct
+  type t = Card.t
 
-type game_to_player_request = StartGame of { kingdom : card list }
+  (* what broken nonsense is this jane street *)
+  include Comparator.Make (Card)
+end
+
+type game_to_player_notification = | [@@deriving yojson_of]
+
+type game_to_player_request =
+  | StartGame of {
+      kingdom : Card.t list;
+      order : string list;
+    }
 [@@deriving yojson_of]
 
 let method_and_params_of_json = function
   | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
   | _ -> failwith "unreachable"
 
+let shuffle (list : 'a list) : 'a list =
+  let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
+  let sorted =
+    List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) tagged
+  in
+  List.map ~f:snd sorted
+
 module Player = struct
+  module Cards = struct
+    type t = {
+      deck : Card.t list;
+      hand : Card.t list;
+      discard : Card.t list;
+    }
+
+    let draw =
+      let shuffle_if_necessary = function
+        | { deck = []; hand; discard } ->
+            let deck = shuffle discard in
+            let discard = [] in
+            { deck; hand; discard }
+        | cards -> cards
+      in
+      let draw = function
+        | { deck = card :: deck; hand; discard } ->
+            let hand = card :: hand in
+            { deck; hand; discard }
+        | cards -> cards
+      in
+      Fn.compose draw shuffle_if_necessary
+
+    let draw_n (n : int) : t -> t = Fn.apply_n_times ~n draw
+
+    let create () =
+      let deck = [] in
+      let hand = [] in
+      let discard =
+        List.init 3 ~f:(Fn.const Card.Estate)
+        @ List.init 7 ~f:(Fn.const Card.Copper)
+      in
+      draw_n 5 { deck; hand; discard }
+  end
+
   type t = {
     name : string;
     websocket : Dream.websocket;
     pending : (int, Yojson.Safe.t Lwt.u) Hashtbl.t;
+    cards : Cards.t;
   }
 
   let create ~name ~websocket =
@@ -82,7 +139,10 @@ module Player = struct
         )
     in
     Lwt.async listen;
-    { name; websocket; pending }
+    let cards = Cards.create () in
+    { name; websocket; pending; cards }
+
+  let name { name; _ } = name
 
   let fresh_id =
     let counter = ref 0 in
@@ -129,17 +189,89 @@ module Player = struct
     )
 end
 
+module TurnStatus = struct
+  type t = {
+    buys : int;
+    actions : int;
+    treasure : int;
+  }
+end
+
+module Supply = struct
+  type t = (Card.t, int, CardComparator.comparator_witness) Map.t
+
+  let supply_of_card : Card.t -> int = function Card.Gardens -> 12 | _ -> 10
+
+  let create ~kingdom ~n_players : t =
+    let copper =
+      let initial_copper =
+        if n_players > 4 then
+          60
+        else
+          120
+      in
+      initial_copper - (7 * n_players)
+    in
+    let silver =
+      if n_players > 4 then
+        40
+      else
+        80
+    in
+    let gold =
+      if n_players > 4 then
+        30
+      else
+        60
+    in
+    let (estate as duchy) = match n_players with 2 -> 8 | _ -> 12 in
+    let province =
+      match n_players with
+      | 2 -> 8
+      | 3 | 4 -> 12
+      | 5 -> 15
+      | 6 -> 18
+      | _ -> failwith "invalid number of players"
+    in
+    let curse =
+      match n_players with
+      | 2 -> 10
+      | 3 -> 20
+      | 4 -> 30
+      | 5 -> 40
+      | 6 -> 50
+      | _ -> failwith "unreachable"
+    in
+    let kingdom_supply =
+      List.map kingdom ~f:(fun card -> card, supply_of_card card)
+    in
+    Map.of_alist_exn
+      (module CardComparator)
+      Card.(
+        (Copper, copper)
+        :: (Silver, silver)
+        :: (Gold, gold)
+        :: (Estate, estate)
+        :: (Duchy, duchy)
+        :: (Province, province)
+        :: (Curse, curse)
+        :: kingdom_supply
+      )
+end
+
 type state =
   | PreStart of {
       game_over_promise : unit Lwt.t;
       game_over_resolver : unit Lwt.u;
       players : Player.t list;
     }
-  | InProgress of {
+  | Turn of {
       game_over_resolver : unit Lwt.u;
-      kingdom : card list;
+      kingdom : Card.t list;
+      supply : Supply.t;
       current_player : Player.t;
-      other_players : Player.t list;
+      turn_status : TurnStatus.t;
+      next_players : Player.t list;
     }
 
 type t = {
@@ -148,6 +280,7 @@ type t = {
 }
 
 let randomizer_cards =
+  let open Card in
   [
     Cellar;
     Chapel;
@@ -177,36 +310,56 @@ let randomizer_cards =
     Artisan;
   ]
 
-let shuffle (list : 'a list) : 'a list =
-  let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
-  let sorted =
-    List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) tagged
-  in
-  List.map ~f:snd sorted
+let start_turn
+    ~(game : t)
+    ~(game_over_resolver : unit Lwt.u)
+    ~(kingdom : Card.t list)
+    ~(supply : Supply.t)
+    ~(current_player : Player.t)
+    ~(next_players : Player.t list) : unit Lwt.t =
+  (* TODO *)
+  ignore
+    (game, game_over_resolver, kingdom, supply, current_player, next_players);
+  Lwt.return_unit
 
 (* PRECONDITION: between 2 and 4 players *)
-let start (game : t) (players : Player.t list) (game_over_resolver : unit Lwt.u)
-    : unit =
-  let current_player, other_players =
+let start_game
+    (game : t)
+    (players : Player.t list)
+    (game_over_resolver : unit Lwt.u) : unit Lwt.t =
+  let current_player, next_players =
     match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
   in
   let kingdom = List.take (shuffle randomizer_cards) 10 in
-  List.iter players ~f:(fun player ->
-      Player.notify player (StartGame { kingdom })
-  );
-  game.set
-    (InProgress { kingdom; current_player; other_players; game_over_resolver })
+  let supply = Supply.create ~kingdom ~n_players:(List.length players) in
+  let order = List.map (current_player :: next_players) ~f:Player.name in
+  let%lwt _ =
+    Lwt.all
+      (List.map players ~f:(fun player ->
+           Player.request player (StartGame { kingdom; order })
+       )
+      )
+  in
+  start_turn
+    ~game
+    ~game_over_resolver
+    ~kingdom
+    ~supply
+    ~current_player
+    ~next_players
 
 let create () : t =
   let state, set =
     let players = [] in
     let game_over_promise, game_over_resolver = Lwt.wait () in
-    React.S.create ~eq:phys_equal
+    React.S.create
+      ~eq:phys_equal
       (PreStart { players; game_over_promise; game_over_resolver })
   in
   { state; set }
 
-let add_player (game : t) (name : string) (websocket : Dream.websocket) =
+let add_player (game : t) (name : string) (websocket : Dream.websocket) :
+    unit Lwt.t =
   match React.S.value game.state with
   | PreStart { players; game_over_promise; game_over_resolver } ->
       if
@@ -218,7 +371,7 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) =
       else
         let players = Player.create ~name ~websocket :: players in
         if List.length players >= 2 then
-          start game players game_over_resolver
+          Lwt.async (fun () -> start_game game players game_over_resolver)
         else
           game.set (PreStart { players; game_over_promise; game_over_resolver });
         game_over_promise

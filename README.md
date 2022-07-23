@@ -209,6 +209,8 @@ type Card =
   | "Duchy"
   | "Province"
   | "Gardens"
+  // CURSE CARD
+  | "Curse"
   // ACTION CARDS
   | "Cellar"
   | "Chapel"
