@@ -12,6 +12,7 @@ depends: [
   "lwt_ppx"
   "ppx_sexp_conv"
   "odoc" {with-doc}
+  "stdio"
 ]
 build: [
   ["dune" "subst"] {dev}
