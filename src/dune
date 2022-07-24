@@ -2,12 +2,11 @@
   (public_name dominai)
   (name main)
   (libraries
-    base
+    core
     dream
     jsonrpc
     yojson
     react
-    stdio
   )
   (preprocess (pps
     lwt_ppx

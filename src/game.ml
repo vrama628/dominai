@@ -1,5 +1,4 @@
-open Base
-open Stdio
+open Core
 
 module Card = struct
   type t =
@@ -54,147 +53,6 @@ module CardComparator = struct
 
   (* what broken nonsense is this jane street *)
   include Comparator.Make (Card)
-end
-
-type game_to_player_notification = | [@@deriving yojson_of]
-
-type game_to_player_request =
-  | StartGame of {
-      kingdom : Card.t list;
-      order : string list;
-    }
-[@@deriving yojson_of]
-
-let method_and_params_of_json = function
-  | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
-  | _ -> failwith "unreachable"
-
-let shuffle (list : 'a list) : 'a list =
-  let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
-  let sorted =
-    List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) tagged
-  in
-  List.map ~f:snd sorted
-
-module Player = struct
-  module Cards = struct
-    type t = {
-      deck : Card.t list;
-      hand : Card.t list;
-      discard : Card.t list;
-    }
-
-    let draw =
-      let shuffle_if_necessary = function
-        | { deck = []; hand; discard } ->
-            let deck = shuffle discard in
-            let discard = [] in
-            { deck; hand; discard }
-        | cards -> cards
-      in
-      let draw = function
-        | { deck = card :: deck; hand; discard } ->
-            let hand = card :: hand in
-            { deck; hand; discard }
-        | cards -> cards
-      in
-      Fn.compose draw shuffle_if_necessary
-
-    let draw_n (n : int) : t -> t = Fn.apply_n_times ~n draw
-
-    let create () =
-      let deck = [] in
-      let hand = [] in
-      let discard =
-        List.init 3 ~f:(Fn.const Card.Estate)
-        @ List.init 7 ~f:(Fn.const Card.Copper)
-      in
-      draw_n 5 { deck; hand; discard }
-  end
-
-  type t = {
-    name : string;
-    websocket : Dream.websocket;
-    pending : (int, Yojson.Safe.t Lwt.u) Hashtbl.t;
-    cards : Cards.t;
-  }
-
-  let create ~name ~websocket =
-    let pending = Hashtbl.create (module Int) in
-    let rec listen () =
-      match%lwt Dream.receive websocket with
-      | None -> Lwt.return_unit
-      | Some message -> (
-          match
-            message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
-          with
-          | Jsonrpc.Packet.Response
-              Jsonrpc.Response.{ id = `Int id; result = Ok json } ->
-              let resolver =
-                Option.value_exn (Hashtbl.find_and_remove pending id)
-              in
-              Lwt.wakeup_later resolver json;
-              listen ()
-          | _ -> failwith "TODO"
-        )
-    in
-    Lwt.async listen;
-    let cards = Cards.create () in
-    { name; websocket; pending; cards }
-
-  let name { name; _ } = name
-
-  let fresh_id =
-    let counter = ref 0 in
-    fun () ->
-      Ref.replace counter (( + ) 1);
-      !counter
-
-  let request { websocket; pending; _ } (request : game_to_player_request) :
-      Yojson.Safe.t Lwt.t =
-    let method_, params =
-      request |> yojson_of_game_to_player_request |> method_and_params_of_json
-    in
-    let promise, resolver = Lwt.wait () in
-    let id =
-      let key = fresh_id () in
-      Hashtbl.add_exn pending ~key ~data:resolver;
-      `Int key
-    in
-    Lwt.async (fun () ->
-        Jsonrpc.Request.create ~id ~method_ ~params ()
-        |> Jsonrpc.Request.yojson_of_t
-        |> Yojson.Safe.to_string
-        |> Dream.send websocket
-    );
-    promise
-
-  let notify { websocket; _ } (notification : game_to_player_notification) :
-      unit =
-    let method_, params =
-      notification
-      |> yojson_of_game_to_player_notification
-      |> method_and_params_of_json
-    in
-    Lwt.async (fun () ->
-        try
-          Jsonrpc.Notification.create ~method_ ~params ()
-          |> Jsonrpc.Notification.yojson_of_t
-          |> Yojson.Safe.to_string
-          |> Dream.send websocket
-        with e ->
-          Printf.sprintf "ERROR SENDING %s" (Exn.to_string e)
-          |> print_endline
-          |> Lwt.return
-    )
-end
-
-module TurnStatus = struct
-  type t = {
-    buys : int;
-    actions : int;
-    treasure : int;
-  }
 end
 
 module Supply = struct
@@ -257,6 +115,182 @@ module Supply = struct
         :: (Curse, curse)
         :: kingdom_supply
       )
+
+  let yojson_of_t (supply : t) : Yojson.Safe.t =
+    `Assoc
+      (Map.fold supply ~init:[] ~f:(fun ~key ~data acc ->
+           (Card.yojson_of_t key |> Yojson.Safe.to_string, `Int data) :: acc
+       )
+      )
+end
+
+type game_to_player_notification =
+  | StartTurn of {
+      hand : Card.t list;
+      discard : int;
+      deck : int;
+      supply : Supply.t;
+      buys : int;
+      actions : int;
+      treasure : int;
+    }
+[@@deriving yojson_of]
+
+type game_to_player_request =
+  | StartGame of {
+      kingdom : Card.t list;
+      order : string list;
+    }
+[@@deriving yojson_of]
+
+type player_to_game_request = CleanUp of unit [@@deriving yojson_of]
+
+let method_and_params_of_json = function
+  | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
+  | _ -> failwith "unreachable"
+
+let shuffle (list : 'a list) : 'a list =
+  let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
+  let sorted =
+    List.sort ~compare:(fun (a, _) (b, _) -> Int.compare a b) tagged
+  in
+  List.map ~f:snd sorted
+
+module Player = struct
+  module Cards = struct
+    type t = {
+      deck : Card.t list;
+      hand : Card.t list;
+      discard : Card.t list;
+    }
+
+    let draw =
+      let shuffle_if_necessary = function
+        | { deck = []; hand; discard } ->
+            let deck = shuffle discard in
+            let discard = [] in
+            { deck; hand; discard }
+        | cards -> cards
+      in
+      let draw = function
+        | { deck = card :: deck; hand; discard } ->
+            let hand = card :: hand in
+            { deck; hand; discard }
+        | cards -> cards
+      in
+      Fn.compose draw shuffle_if_necessary
+
+    let draw_n (n : int) : t -> t = Fn.apply_n_times ~n draw
+
+    let create () =
+      let deck = [] in
+      let hand = [] in
+      let discard =
+        List.init 3 ~f:(Fn.const Card.Estate)
+        @ List.init 7 ~f:(Fn.const Card.Copper)
+      in
+      draw_n 5 { deck; hand; discard }
+
+    let deck { deck; _ } : int = List.length deck
+
+    let hand { hand; _ } : Card.t list = hand
+
+    let discard { discard; _ } : int = List.length discard
+  end
+
+  type t = {
+    name : string;
+    websocket : Dream.websocket;
+    pending : (int, t * Yojson.Safe.t Lwt.u) Hashtbl.t;
+    emitter : (player_to_game_request * Yojson.Safe.t Lwt.u) React.event;
+    cards : Cards.t;
+  }
+
+  let create ~name ~websocket =
+    let pending = Hashtbl.create (module Int) in
+    let emitter, emit = React.E.create () in
+    let rec listen () : never_returns =
+      match%lwt Dream.receive websocket with
+      | None -> Lwt.return_unit
+      | Some message -> (
+          match
+            message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
+          with
+          | Jsonrpc.Packet.Response
+              Jsonrpc.Response.{ id = `Int id; result = Ok json } ->
+              let resolver =
+                Option.value_exn (Hashtbl.find_and_remove pending id)
+              in
+              Lwt.wakeup_later resolver json;
+              listen ()
+          | Jsonrpc.Packet.Request Jsonrpc.Request.{ id; method_; params } ->
+              failwith "TODO"
+          | _ -> failwith "TODO"
+        )
+    in
+    Lwt.async listen;
+    let cards = Cards.create () in
+    { name; websocket; pending; cards; emitter }
+
+  let name { name; _ } : string = name
+
+  let deck { cards; _ } : int = Cards.deck cards
+
+  let hand { cards; _ } : Card.t list = Cards.hand cards
+
+  let discard { cards; _ } : int = Cards.discard cards
+
+  let fresh_id =
+    let counter = ref 0 in
+    fun () ->
+      Ref.replace counter (( + ) 1);
+      !counter
+
+  let request { websocket; pending; _ } (request : game_to_player_request) :
+      Yojson.Safe.t Lwt.t =
+    let method_, params =
+      request |> yojson_of_game_to_player_request |> method_and_params_of_json
+    in
+    let promise, resolver = Lwt.wait () in
+    let id =
+      let key = fresh_id () in
+      Hashtbl.add_exn pending ~key ~data:resolver;
+      `Int key
+    in
+    Lwt.async (fun () ->
+        Jsonrpc.Request.create ~id ~method_ ~params ()
+        |> Jsonrpc.Request.yojson_of_t
+        |> Yojson.Safe.to_string
+        |> Dream.send websocket
+    );
+    promise
+
+  let notify { websocket; _ } (notification : game_to_player_notification) :
+      unit =
+    let method_, params =
+      notification
+      |> yojson_of_game_to_player_notification
+      |> method_and_params_of_json
+    in
+    Lwt.async (fun () ->
+        try
+          Jsonrpc.Notification.create ~method_ ~params ()
+          |> Jsonrpc.Notification.yojson_of_t
+          |> Yojson.Safe.to_string
+          |> Dream.send websocket
+        with e ->
+          Printf.sprintf "ERROR SENDING %s" (Exn.to_string e)
+          |> print_endline
+          |> Lwt.return
+    )
+end
+
+module TurnStatus = struct
+  type t = {
+    buys : int;
+    actions : int;
+    treasure : int;
+  }
 end
 
 type state =
@@ -317,10 +351,37 @@ let start_turn
     ~(supply : Supply.t)
     ~(current_player : Player.t)
     ~(next_players : Player.t list) : unit Lwt.t =
-  (* TODO *)
-  ignore
-    (game, game_over_resolver, kingdom, supply, current_player, next_players);
+  let buys = 1 in
+  let actions = 1 in
+  let treasure = 0 in
+  let turn_status = TurnStatus.{ buys; actions; treasure } in
+  game.set
+    (Turn
+       {
+         game_over_resolver;
+         kingdom;
+         supply;
+         current_player;
+         next_players;
+         turn_status;
+       }
+    );
+  Player.notify
+    current_player
+    (StartTurn
+       {
+         hand = Player.hand current_player;
+         discard = Player.discard current_player;
+         deck = Player.deck current_player;
+         supply;
+         buys;
+         actions;
+         treasure;
+       }
+    );
   Lwt.return_unit
+
+let clean_up game : unit Lwt.t = Lwt.return_unit
 
 (* PRECONDITION: between 2 and 4 players *)
 let start_game
