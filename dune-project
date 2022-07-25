@@ -4,7 +4,7 @@
   (name dominai)
   (synopsis "A web server for running dominion games")
   (depends
-    base
+    core
     dream
     jsonrpc
     yojson

@@ -143,11 +143,14 @@ type game_to_player_request =
     }
 [@@deriving yojson_of]
 
-type player_to_game_request = CleanUp of unit [@@deriving yojson_of]
+type player_to_game_request = CleanUp of unit [@@deriving of_yojson]
 
 let method_and_params_of_json = function
   | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
   | _ -> failwith "unreachable"
+
+let json_of_method_and_params ~method_ ~params =
+  `List (`String method_ :: Option.to_list params)
 
 let shuffle (list : 'a list) : 'a list =
   let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
@@ -201,36 +204,58 @@ module Player = struct
   type t = {
     name : string;
     websocket : Dream.websocket;
-    pending : (int, t * Yojson.Safe.t Lwt.u) Hashtbl.t;
-    emitter : (player_to_game_request * Yojson.Safe.t Lwt.u) React.event;
+    pending : (int, Yojson.Safe.t Lwt.u) Hashtbl.t;
     cards : Cards.t;
   }
 
-  let create ~name ~websocket =
+  let create
+      ~(name : string)
+      ~(websocket : Dream.websocket)
+      ~(handler :
+         player_to_game_request ->
+         (Jsonrpc.Json.t, Jsonrpc.Response.Error.t) result Lwt.t
+         ) : t =
     let pending = Hashtbl.create (module Int) in
-    let emitter, emit = React.E.create () in
-    let rec listen () : never_returns =
+    let rec listen () =
       match%lwt Dream.receive websocket with
       | None -> Lwt.return_unit
-      | Some message -> (
-          match
-            message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
-          with
-          | Jsonrpc.Packet.Response
-              Jsonrpc.Response.{ id = `Int id; result = Ok json } ->
-              let resolver =
-                Option.value_exn (Hashtbl.find_and_remove pending id)
-              in
-              Lwt.wakeup_later resolver json;
-              listen ()
-          | Jsonrpc.Packet.Request Jsonrpc.Request.{ id; method_; params } ->
-              failwith "TODO"
-          | _ -> failwith "TODO"
-        )
+      | Some message ->
+          begin
+            match
+              message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
+            with
+            | Jsonrpc.Packet.Response
+                Jsonrpc.Response.{ id = `Int id; result = Ok json } ->
+                let resolver =
+                  Option.value_exn (Hashtbl.find_and_remove pending id)
+                in
+                Lwt.wakeup_later resolver json
+            | Jsonrpc.Packet.Request Jsonrpc.Request.{ id; method_; params } ->
+                let request =
+                  json_of_method_and_params
+                    ~method_
+                    ~params:(Option.map params ~f:Jsonrpc.Structured.yojson_of_t)
+                  |> player_to_game_request_of_yojson
+                in
+                Lwt.async (fun () ->
+                    let%lwt result = handler request in
+                    let response =
+                      match result with
+                      | Ok json -> Jsonrpc.Response.ok id json
+                      | Error error -> Jsonrpc.Response.error id error
+                    in
+                    response
+                    |> Jsonrpc.Response.yojson_of_t
+                    |> Yojson.Safe.to_string
+                    |> Dream.send websocket
+                )
+            | _ -> failwith "TODO"
+          end;
+          listen ()
     in
     Lwt.async listen;
     let cards = Cards.create () in
-    { name; websocket; pending; cards; emitter }
+    { name; websocket; pending; cards }
 
   let name { name; _ } : string = name
 
@@ -273,15 +298,10 @@ module Player = struct
       |> method_and_params_of_json
     in
     Lwt.async (fun () ->
-        try
-          Jsonrpc.Notification.create ~method_ ~params ()
-          |> Jsonrpc.Notification.yojson_of_t
-          |> Yojson.Safe.to_string
-          |> Dream.send websocket
-        with e ->
-          Printf.sprintf "ERROR SENDING %s" (Exn.to_string e)
-          |> print_endline
-          |> Lwt.return
+        Jsonrpc.Notification.create ~method_ ~params ()
+        |> Jsonrpc.Notification.yojson_of_t
+        |> Yojson.Safe.to_string
+        |> Dream.send websocket
     )
 end
 
@@ -381,7 +401,19 @@ let start_turn
     );
   Lwt.return_unit
 
-let clean_up game : unit Lwt.t = Lwt.return_unit
+let clean_up ~(game : t) ~(name : string) :
+    (Yojson.Safe.t, Jsonrpc.Response.Error.t) result Lwt.t =
+  match React.S.value game.state with
+  | Turn { current_player; _ }
+    when String.equal (Player.name current_player) name ->
+      failwith "TODO"
+  | _ ->
+      Lwt.return
+        (Error
+           Jsonrpc.Response.Error.(
+             make ~code:Code.InvalidRequest ~message:"It is not your turn." ()
+           )
+        )
 
 (* PRECONDITION: between 2 and 4 players *)
 let start_game
@@ -430,7 +462,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
       then
         failwith (Printf.sprintf "Player with name %s already exists." name)
       else
-        let players = Player.create ~name ~websocket :: players in
+        let handler = function CleanUp () -> clean_up ~game ~name in
+        let players = Player.create ~name ~websocket ~handler :: players in
         if List.length players >= 2 then
           Lwt.async (fun () -> start_game game players game_over_resolver)
         else
