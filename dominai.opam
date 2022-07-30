@@ -3,7 +3,7 @@ opam-version: "2.0"
 synopsis: "A web server for running dominion games"
 depends: [
   "dune" {>= "3.0"}
-  "base"
+  "core"
   "dream"
   "jsonrpc"
   "yojson"
@@ -11,8 +11,9 @@ depends: [
   "ppx_yojson_conv"
   "lwt_ppx"
   "ppx_sexp_conv"
-  "odoc" {with-doc}
   "stdio"
+  "ppx_deriving"
+  "odoc" {with-doc}
 ]
 build: [
   ["dune" "subst"] {dev}

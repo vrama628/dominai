@@ -1,14 +1,5 @@
 (executable
-  (name main)
-  (libraries
-    core
-    jsonrpc
-    yojson
-    websocket-lwt-unix
-  )
-  (preprocess (pps
-    lwt_ppx
-    ppx_deriving_yojson
-    ppx_let
-  ))
-)
+ (name main)
+ (libraries core core_unix.command_unix jsonrpc yojson websocket-lwt-unix)
+ (preprocess
+  (pps lwt_ppx ppx_deriving_yojson ppx_let)))

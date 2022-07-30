@@ -185,6 +185,11 @@ module Player = struct
 
     let draw_n (n : int) : t -> t = Fn.apply_n_times ~n draw
 
+    let clean_up { deck; hand; discard } =
+      let discard = hand @ discard in
+      let hand = [] in
+      draw_n 5 { deck; hand; discard }
+
     let create () =
       let deck = [] in
       let hand = [] in
@@ -194,18 +199,18 @@ module Player = struct
       in
       draw_n 5 { deck; hand; discard }
 
-    let deck { deck; _ } : int = List.length deck
+    let get_deck { deck; _ } : int = List.length deck
 
-    let hand { hand; _ } : Card.t list = hand
+    let get_hand { hand; _ } : Card.t list = hand
 
-    let discard { discard; _ } : int = List.length discard
+    let get_discard { discard; _ } : int = List.length discard
   end
 
   type t = {
     name : string;
     websocket : Dream.websocket;
     pending : (int, Yojson.Safe.t Lwt.u) Hashtbl.t;
-    cards : Cards.t;
+    cards : Cards.t ref;
   }
 
   let create
@@ -254,16 +259,18 @@ module Player = struct
           listen ()
     in
     Lwt.async listen;
-    let cards = Cards.create () in
+    let cards = ref (Cards.create ()) in
     { name; websocket; pending; cards }
 
   let name { name; _ } : string = name
 
-  let deck { cards; _ } : int = Cards.deck cards
+  let get_deck { cards; _ } : int = Cards.get_deck !cards
 
-  let hand { cards; _ } : Card.t list = Cards.hand cards
+  let get_hand { cards; _ } : Card.t list = Cards.get_hand !cards
 
-  let discard { cards; _ } : int = Cards.discard cards
+  let get_discard { cards; _ } : int = Cards.get_discard !cards
+
+  let clean_up (player : t) : unit = Ref.replace player.cards Cards.clean_up
 
   let fresh_id =
     let counter = ref 0 in
@@ -390,9 +397,9 @@ let start_turn
     current_player
     (StartTurn
        {
-         hand = Player.hand current_player;
-         discard = Player.discard current_player;
-         deck = Player.deck current_player;
+         hand = Player.get_hand current_player;
+         discard = Player.get_discard current_player;
+         deck = Player.get_deck current_player;
          supply;
          buys;
          actions;
@@ -401,12 +408,46 @@ let start_turn
     );
   Lwt.return_unit
 
+type clean_up_response = {
+  hand : Card.t list;
+  discard : int;
+  deck : int;
+  supply : Supply.t;
+}
+[@@deriving yojson_of]
+
 let clean_up ~(game : t) ~(name : string) :
-    (Yojson.Safe.t, Jsonrpc.Response.Error.t) result Lwt.t =
+    (clean_up_response, Jsonrpc.Response.Error.t) result Lwt.t =
   match React.S.value game.state with
-  | Turn { current_player; _ }
+  | Turn
+      {
+        current_player;
+        next_players = next_player :: next_players;
+        game_over_resolver;
+        kingdom;
+        supply;
+        _;
+      }
     when String.equal (Player.name current_player) name ->
-      failwith "TODO"
+      Player.clean_up current_player;
+      let clean_up_response =
+        let hand = Player.get_hand current_player in
+        let discard = Player.get_discard current_player in
+        let deck = Player.get_deck current_player in
+        { hand; discard; deck; supply }
+      in
+      let next_players = next_players @ [ current_player ] in
+      let current_player = next_player in
+      Lwt.async (fun () ->
+          start_turn
+            ~game
+            ~game_over_resolver
+            ~kingdom
+            ~supply
+            ~current_player
+            ~next_players
+      );
+      Lwt.return (Ok clean_up_response)
   | _ ->
       Lwt.return
         (Error
@@ -462,7 +503,11 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
       then
         failwith (Printf.sprintf "Player with name %s already exists." name)
       else
-        let handler = function CleanUp () -> clean_up ~game ~name in
+        let handler = function
+          | CleanUp () ->
+              clean_up ~game ~name
+              |> Lwt.map (Result.map ~f:yojson_of_clean_up_response)
+        in
         let players = Player.create ~name ~websocket ~handler :: players in
         if List.length players >= 2 then
           Lwt.async (fun () -> start_game game players game_over_resolver)

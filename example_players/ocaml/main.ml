@@ -26,5 +26,6 @@ let params : (unit -> unit) Command.Param.t =
 
 let () =
   Command.basic
-    ~summary:"Run a simple Dominion AI against the specified game server" params
-  |> Command.run
+    ~summary:"Run a simple Dominion AI against the specified game server"
+    params
+  |> Command_unix.run

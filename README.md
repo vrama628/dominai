@@ -82,8 +82,6 @@ Request:
     actions: number; // always 1
     treasure: number; // always 0
 }
-Response:
-{}
 ```
 
 ### `CleanUp`
