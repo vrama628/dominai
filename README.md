@@ -53,8 +53,8 @@ At this time, the server will send a `StartGame` request to all players.
 "StartGame" // game to player request
 Request:
 {
-    kingdom: [Card];
-    order: [string]; // player names in turn order
+    kingdom: Card[];
+    order: string[]; // player names in turn order
 }
 Reponse:
 {}
@@ -74,7 +74,7 @@ the time you end your turn with a `CleanUp` request.
 "StartTurn" // game to player notification
 Request:
 {
-    hand: [Card];
+    hand: Card[];
     discard: number;
     deck: number;
     supply: { [Card]: number; };
@@ -91,7 +91,7 @@ Request:
 {}
 Response:
 {
-    hand: [Card];
+    hand: Card[];
     discard: number;
     deck: number;
     supply: { [Card]: number; };
@@ -109,10 +109,11 @@ You may only play and buy cards during your turn.
 Request:
 {
     card: Card;
+    data?: <see below>;
 }
 Response:
 {
-    hand: [Card];
+    hand: Card[];
     discard: number;
     deck: number;
     supply: { [Card]: number; };
@@ -120,6 +121,102 @@ Response:
     actions: number;
     treasure: number;
 }
+```
+Depending on which card you play, you may need to supply additional information
+in the `data` field of the request.
+The cards for which this is the case and the expected data are listed below.
+```
+{
+    card: "Cellar";
+    data: Card[]; // the cards to discard
+}
+{
+    card: "Chapel";
+    data: Card[]; // the cards to trash
+}
+{
+    card: "Workshop";
+    data: Card; // the card to gain
+}
+{
+    card: "Poacher";
+    data: Card[]; // the cards to discard
+}
+{
+    card: "Remodel";
+    data: {
+        trash: Card; // the card from your hand to trash
+        gain: Card; // the card from the supply to gain
+    };
+}
+{
+    card: "ThroneRoom";
+    data: Card; // the card to throne
+}
+{
+    card: "Mine";
+    data: {
+        trash: Card; // the card from your hand to trash
+        gain: Card; // the treasure from the supply to gain to your hand
+    };
+}
+{
+    card: "Artisan";
+    data: {
+        gain: Card; // the card from the supply to gain to your hand
+        topdeck: Card; // the card from your hand to topdeck
+    };
+}
+```
+In some situations, the server may send the player a request
+with additional information which the player must respond to in order to
+complete playing the card.
+The cards for which this is may apply and the associated request/response formats
+are listed below.
+```
+"Harbinger" // game to player request
+Request:
+{
+    discard: Card[]; // the player's discard pile
+}
+Response:
+{
+    card: Card; // the card to topdeck
+}
+
+"Vassal" // game to player request
+Request:
+{
+    card: Card; // the action card from the top of your deck
+}
+Response:
+{
+    play: boolean; // whether to play the card.
+}
+
+"Library" // game to player request
+Request:
+{
+    card: Card; // an action card that you may choose to skip
+}
+Response:
+{
+    skip: boolean; // whether to skip placing this card into your hand
+}
+
+"Sentry" // game to player request
+Request:
+{
+    cards: [Card, Card]; // the top 2 cards of your deck
+}
+Response:
+{
+    card: Card; // which of the revealed cards this pertains to
+    do: "trash" | "discard" | "topdeck"; // what to do to this card
+}[] // NOTE: the response is a two-element array.
+    // The actions in the array are performed in order, so if you wish
+    // to topdeck both cards in a particular order,
+    // then put the card you wish to be on top second in this array.
 ```
 
 ### `Buy`
