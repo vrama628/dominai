@@ -109,7 +109,7 @@ You may only play and buy cards during your turn.
 Request:
 {
     card: Card;
-    data?: <see below>;
+    data: <see below>;
 }
 Response:
 {
@@ -125,6 +125,7 @@ Response:
 Depending on which card you play, you may need to supply additional information
 in the `data` field of the request.
 The cards for which this is the case and the expected data are listed below.
+In all other cases, the `data` field must be `null`.
 ```
 {
     card: "Cellar";

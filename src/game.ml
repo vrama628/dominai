@@ -39,13 +39,86 @@ module Card = struct
     | Sentry
     | Witch
     | Artisan
-  [@@deriving yojson_of, ord, sexp]
+  [@@deriving yojson, ord, sexp, eq]
 
   (* hack around ppx_yojson_conv's weird json translation of enums *)
+
   let yojson_of_t card =
     match yojson_of_t card with
     | `List [ name ] -> name
     | _ -> failwith "unreachable"
+
+  let t_of_yojson json = t_of_yojson (`List [ json ])
+end
+
+let error
+    (fmt :
+      ('r, unit, string, ('a, Jsonrpc.Response.Error.t) result Lwt.t) format4
+      ) : 'r =
+  Printf.ksprintf
+    (fun message ->
+      Lwt.return
+        (Error
+           Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
+        )
+    )
+    fmt
+
+let it_is_not_your_turn_error = error "It is not your turn."
+
+module Play = struct
+  module Cellar = struct
+    type t = Card.t list [@@deriving yojson]
+  end
+  module Chapel = struct
+    type t = Card.t list [@@deriving yojson]
+  end
+  module Workshop = struct
+    type t = Card.t [@@deriving yojson]
+  end
+  module Poacher = struct
+    type t = Card.t list [@@deriving yojson]
+  end
+  module Remodel = struct
+    type t = {
+      trash : Card.t;
+      gain : Card.t;
+    }
+    [@@deriving yojson]
+  end
+  module ThroneRoom = struct
+    type t = Card.t [@@deriving yojson]
+  end
+  module Mine = struct
+    type t = {
+      trash : Card.t;
+      gain : Card.t;
+    }
+    [@@deriving yojson]
+  end
+  module Artisan = struct
+    type t = {
+      gain : Card.t;
+      topdeck : Card.t;
+    }
+    [@@deriving yojson]
+  end
+
+  type data = Yojson.Safe.t
+  let data_of_yojson = Fn.id
+
+  let parse
+      ~(return : ('b, Jsonrpc.Response.Error.t) result Lwt.t -> 'a)
+      (t_of_yojson : data -> 'a)
+      (data : data) : 'a =
+    try t_of_yojson data
+    with Ppx_yojson_conv_lib.Yojson_conv.Of_yojson_error (e, json) ->
+      return
+        (error
+           "Invalid format of data field:\ndata: %s\nerror: %s"
+           (Yojson.Safe.to_string json)
+           (Exn.to_string e)
+        )
 end
 
 module CardComparator = struct
@@ -143,7 +216,13 @@ type game_to_player_request =
     }
 [@@deriving yojson_of]
 
-type player_to_game_request = CleanUp of unit [@@deriving of_yojson]
+type player_to_game_request =
+  | CleanUp of unit
+  | Play of {
+      card : Card.t;
+      data : Play.data;
+    }
+[@@deriving of_yojson]
 
 let method_and_params_of_json = function
   | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
@@ -270,6 +349,12 @@ module Player = struct
 
   let get_discard { cards; _ } : int = Cards.get_discard !cards
 
+  let set_hand (hand : Card.t list) { cards; _ } : unit =
+    cards := { !cards with hand }
+
+  let draw_n (n : int) (player : t) : unit =
+    Ref.replace player.cards (Cards.draw_n n)
+
   let clean_up (player : t) : unit = Ref.replace player.cards Cards.clean_up
 
   let fresh_id =
@@ -318,6 +403,33 @@ module TurnStatus = struct
     actions : int;
     treasure : int;
   }
+
+  let add_buys (n : int) turn_status : t =
+    { turn_status with buys = turn_status.buys + n }
+
+  let add_actions (n : int) turn_status : t =
+    { turn_status with actions = turn_status.actions + n }
+
+  let add_treasure (n : int) turn_status : t =
+    { turn_status with treasure = turn_status.treasure + n }
+
+  let expend_buy turn_status : t option =
+    if turn_status.buys > 0 then
+      Some { turn_status with buys = turn_status.buys - 1 }
+    else
+      None
+
+  let expend_action turn_status : t option =
+    if turn_status.actions > 0 then
+      Some { turn_status with actions = turn_status.actions - 1 }
+    else
+      None
+
+  let expend_treasure (n : int) turn_status : t option =
+    if turn_status.treasure >= n then
+      Some { turn_status with treasure = turn_status.actions - n }
+    else
+      None
 end
 
 type state =
@@ -448,13 +560,7 @@ let clean_up ~(game : t) ~(name : string) :
             ~next_players
       );
       Lwt.return (Ok clean_up_response)
-  | _ ->
-      Lwt.return
-        (Error
-           Jsonrpc.Response.Error.(
-             make ~code:Code.InvalidRequest ~message:"It is not your turn." ()
-           )
-        )
+  | _ -> it_is_not_your_turn_error
 
 (* PRECONDITION: between 2 and 4 players *)
 let start_game
@@ -482,6 +588,116 @@ let start_game
     ~current_player
     ~next_players
 
+type play_response = {
+  hand : Card.t list;
+  discard : int;
+  deck : int;
+  supply : Supply.t;
+  buys : int;
+  actions : int;
+  treasure : int;
+}
+[@@deriving yojson_of]
+
+(** find_and_remove card cards =
+  Some cards' where cards' = cards with one instance of card removed, if one exists
+  OR None if there is no instance of card in cards
+*)
+let rec find_and_remove (card : Card.t) : Card.t list -> Card.t list option =
+  function
+  | [] -> None
+  | x :: xs ->
+      if Card.equal x card then
+        Some xs
+      else
+        Option.map ~f:(fun cards' -> x :: cards') (find_and_remove card xs)
+
+(** is_submultiset a b =
+    Some b' if a is a submultiset of b, where b' is b with a removed
+    None if a is not a submultiset of b
+*)
+let rec is_submultiset (a : Card.t list) (b : Card.t list) : Card.t list option
+    =
+  match a with
+  | [] -> Some b
+  | x :: xs -> (
+      match find_and_remove x b with
+      | None -> None
+      | Some b' -> is_submultiset xs b'
+    )
+
+let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :
+    (play_response, Jsonrpc.Response.Error.t) result Lwt.t =
+  match React.S.value game.state with
+  | Turn ({ current_player; turn_status; supply; _ } as turn)
+    when String.equal (Player.name current_player) name ->
+      With_return.with_return (fun With_return.{ return } ->
+          begin
+            match card with
+            (* we could error when people try to play victory cards but we'll just noop *)
+            | Card.Estate | Card.Duchy | Card.Province | Card.Gardens
+            | Card.Curse ->
+                return (error "")
+            | Card.Copper ->
+                let turn_status =
+                  TurnStatus.
+                    { turn_status with treasure = turn_status.treasure + 1 }
+                in
+                game.set (Turn { turn with turn_status })
+            | Card.Silver ->
+                let turn_status =
+                  TurnStatus.
+                    { turn_status with treasure = turn_status.treasure + 2 }
+                in
+                game.set (Turn { turn with turn_status })
+            | Card.Gold ->
+                let turn_status =
+                  TurnStatus.
+                    { turn_status with treasure = turn_status.treasure + 3 }
+                in
+                game.set (Turn { turn with turn_status })
+            | Card.Cellar ->
+                let turn_status =
+                  match TurnStatus.expend_action turn_status with
+                  | None -> return (error "You don't have any actions left.")
+                  | Some turn_status -> turn_status
+                in
+                let cards = Play.parse ~return Play.Cellar.t_of_yojson data in
+                let hand = Player.get_hand current_player in
+                let hand_after_discarding =
+                  match is_submultiset cards hand with
+                  | None ->
+                      return
+                        (error
+                           "Your hand %s does not contain all of the cards %s"
+                           ([%yojson_of: Card.t list] hand
+                           |> Yojson.Safe.to_string
+                           )
+                           (data |> Yojson.Safe.to_string)
+                        )
+                  | Some hand_after_discarding -> hand_after_discarding
+                in
+                Player.set_hand hand_after_discarding current_player;
+                Player.draw_n (List.length cards) current_player;
+                let turn_status = TurnStatus.add_actions 1 turn_status in
+                game.set (Turn { turn with turn_status })
+            | Card.Chapel | Card.Moat | Card.Harbinger | Card.Merchant
+            | Card.Vassal | Card.Village | Card.Workshop | Card.Bureaucrat
+            | Card.Militia | Card.Moneylender | Card.Poacher | Card.Remodel
+            | Card.Smithy | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom
+            | Card.Festival | Card.Laboratory | Card.Library | Card.Market
+            | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
+                failwith "unimplemented"
+          end;
+          let hand = Player.get_hand current_player in
+          let discard = Player.get_discard current_player in
+          let deck = Player.get_deck current_player in
+          let TurnStatus.{ buys; actions; treasure } = turn_status in
+          Lwt.return
+            (Ok { hand; discard; deck; supply; buys; actions; treasure })
+      )
+  | _ -> it_is_not_your_turn_error
+
 let create () : t =
   let state, set =
     let players = [] in
@@ -507,6 +723,9 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
           | CleanUp () ->
               clean_up ~game ~name
               |> Lwt.map (Result.map ~f:yojson_of_clean_up_response)
+          | Play { card; data } ->
+              play ~game ~card ~data ~name
+              |> Lwt.map (Result.map ~f:yojson_of_play_response)
         in
         let players = Player.create ~name ~websocket ~handler :: players in
         if List.length players >= 2 then

@@ -1,17 +1,11 @@
 (executable
-  (public_name dominai)
-  (name main)
-  (libraries
-    core
-    dream
-    jsonrpc
-    yojson
-    react
-  )
-  (preprocess (pps
-    lwt_ppx
-    ppx_yojson_conv
-    ppx_deriving.ord
-    ppx_sexp_conv
-  ))
-)
+ (public_name dominai)
+ (name main)
+ (libraries core dream jsonrpc yojson react)
+ (preprocess
+  (pps
+   lwt_ppx
+   ppx_yojson_conv
+   ppx_deriving.ord
+   ppx_deriving.eq
+   ppx_sexp_conv)))
