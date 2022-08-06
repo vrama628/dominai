@@ -5,6 +5,7 @@
  (preprocess
   (pps
    lwt_ppx
+   ppx_let
    ppx_yojson_conv
    ppx_deriving.ord
    ppx_deriving.eq

@@ -51,20 +51,27 @@ module Card = struct
   let t_of_yojson json = t_of_yojson (`List [ json ])
 end
 
-let error
-    (fmt :
-      ('r, unit, string, ('a, Jsonrpc.Response.Error.t) result Lwt.t) format4
-      ) : 'r =
-  Printf.ksprintf
-    (fun message ->
-      Lwt.return
-        (Error
-           Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
-        )
-    )
-    fmt
+(* TODO: clearer story around when errorables are LWT *)
+module Errorable = struct
+  type 'a t = ('a, Jsonrpc.Response.Error.t) result Lwt.t
 
-let it_is_not_your_turn_error = error "It is not your turn."
+  let return (x : 'a) : 'a t = Lwt.return (Ok x)
+
+  let error (fmt : ('r, unit, string, 'a t) format4) : 'r =
+    Printf.ksprintf
+      (fun message ->
+        Lwt.return
+          (Error
+             Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
+          )
+      )
+      fmt
+
+  module Let_syntax = struct
+    let bind (x : 'a t) ~(f : 'a -> 'b t) : 'b t =
+      match%lwt x with Ok y -> f y | Error e -> Lwt.return (Error e)
+  end
+end
 
 module Play = struct
   module Cellar = struct
@@ -107,18 +114,13 @@ module Play = struct
   type data = Yojson.Safe.t
   let data_of_yojson = Fn.id
 
-  let parse
-      ~(return : ('b, Jsonrpc.Response.Error.t) result Lwt.t -> 'a)
-      (t_of_yojson : data -> 'a)
-      (data : data) : 'a =
-    try t_of_yojson data
+  let parse (t_of_yojson : data -> 'a) (data : data) : 'a Errorable.t =
+    try Errorable.return (t_of_yojson data)
     with Ppx_yojson_conv_lib.Yojson_conv.Of_yojson_error (e, json) ->
-      return
-        (error
-           "Invalid format of data field:\ndata: %s\nerror: %s"
-           (Yojson.Safe.to_string json)
-           (Exn.to_string e)
-        )
+      Errorable.error
+        "Invalid format of data field:\ndata: %s\nerror: %s"
+        (Yojson.Safe.to_string json)
+        (Exn.to_string e)
 end
 
 module CardComparator = struct
@@ -413,23 +415,23 @@ module TurnStatus = struct
   let add_treasure (n : int) turn_status : t =
     { turn_status with treasure = turn_status.treasure + n }
 
-  let expend_buy turn_status : t option =
+  let expend_buy turn_status : t Errorable.t =
     if turn_status.buys > 0 then
-      Some { turn_status with buys = turn_status.buys - 1 }
+      Errorable.return { turn_status with buys = turn_status.buys - 1 }
     else
-      None
+      Errorable.error "No buys left."
 
-  let expend_action turn_status : t option =
+  let expend_action turn_status : t Errorable.t =
     if turn_status.actions > 0 then
-      Some { turn_status with actions = turn_status.actions - 1 }
+      Errorable.return { turn_status with actions = turn_status.actions - 1 }
     else
-      None
+      Errorable.error "No actions left."
 
-  let expend_treasure (n : int) turn_status : t option =
+  let expend_treasure (n : int) turn_status : t Errorable.t =
     if turn_status.treasure >= n then
-      Some { turn_status with treasure = turn_status.actions - n }
+      Errorable.return { turn_status with treasure = turn_status.actions - n }
     else
-      None
+      Errorable.error "No treasure left."
 end
 
 type state =
@@ -528,8 +530,7 @@ type clean_up_response = {
 }
 [@@deriving yojson_of]
 
-let clean_up ~(game : t) ~(name : string) :
-    (clean_up_response, Jsonrpc.Response.Error.t) result Lwt.t =
+let clean_up ~(game : t) ~(name : string) : clean_up_response Errorable.t =
   match React.S.value game.state with
   | Turn
       {
@@ -560,7 +561,7 @@ let clean_up ~(game : t) ~(name : string) :
             ~next_players
       );
       Lwt.return (Ok clean_up_response)
-  | _ -> it_is_not_your_turn_error
+  | _ -> Errorable.error "It is not your turn."
 
 (* PRECONDITION: between 2 and 4 players *)
 let start_game
@@ -628,75 +629,69 @@ let rec is_submultiset (a : Card.t list) (b : Card.t list) : Card.t list option
 
 let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :
     (play_response, Jsonrpc.Response.Error.t) result Lwt.t =
+  let open Errorable in
   match React.S.value game.state with
   | Turn ({ current_player; turn_status; supply; _ } as turn)
     when String.equal (Player.name current_player) name ->
-      With_return.with_return (fun With_return.{ return } ->
-          begin
-            match card with
-            (* we could error when people try to play victory cards but we'll just noop *)
-            | Card.Estate | Card.Duchy | Card.Province | Card.Gardens
-            | Card.Curse ->
-                return (error "")
-            | Card.Copper ->
-                let turn_status =
-                  TurnStatus.
-                    { turn_status with treasure = turn_status.treasure + 1 }
-                in
-                game.set (Turn { turn with turn_status })
-            | Card.Silver ->
-                let turn_status =
-                  TurnStatus.
-                    { turn_status with treasure = turn_status.treasure + 2 }
-                in
-                game.set (Turn { turn with turn_status })
-            | Card.Gold ->
-                let turn_status =
-                  TurnStatus.
-                    { turn_status with treasure = turn_status.treasure + 3 }
-                in
-                game.set (Turn { turn with turn_status })
-            | Card.Cellar ->
-                let turn_status =
-                  match TurnStatus.expend_action turn_status with
-                  | None -> return (error "You don't have any actions left.")
-                  | Some turn_status -> turn_status
-                in
-                let cards = Play.parse ~return Play.Cellar.t_of_yojson data in
-                let hand = Player.get_hand current_player in
-                let hand_after_discarding =
-                  match is_submultiset cards hand with
-                  | None ->
-                      return
-                        (error
-                           "Your hand %s does not contain all of the cards %s"
-                           ([%yojson_of: Card.t list] hand
-                           |> Yojson.Safe.to_string
-                           )
-                           (data |> Yojson.Safe.to_string)
-                        )
-                  | Some hand_after_discarding -> hand_after_discarding
-                in
-                Player.set_hand hand_after_discarding current_player;
-                Player.draw_n (List.length cards) current_player;
-                let turn_status = TurnStatus.add_actions 1 turn_status in
-                game.set (Turn { turn with turn_status })
-            | Card.Chapel | Card.Moat | Card.Harbinger | Card.Merchant
-            | Card.Vassal | Card.Village | Card.Workshop | Card.Bureaucrat
-            | Card.Militia | Card.Moneylender | Card.Poacher | Card.Remodel
-            | Card.Smithy | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom
-            | Card.Festival | Card.Laboratory | Card.Library | Card.Market
-            | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
-                failwith "unimplemented"
-          end;
-          let hand = Player.get_hand current_player in
-          let discard = Player.get_discard current_player in
-          let deck = Player.get_deck current_player in
-          let TurnStatus.{ buys; actions; treasure } = turn_status in
-          Lwt.return
-            (Ok { hand; discard; deck; supply; buys; actions; treasure })
-      )
-  | _ -> it_is_not_your_turn_error
+      let%bind () =
+        match card with
+        (* we could error when people try to play victory cards but we'll just noop *)
+        | Card.Estate | Card.Duchy | Card.Province | Card.Gardens | Card.Curse
+          ->
+            error "You cannot play victory cards."
+        | Card.Copper ->
+            let turn_status =
+              TurnStatus.
+                { turn_status with treasure = turn_status.treasure + 1 }
+            in
+            game.set (Turn { turn with turn_status });
+            return ()
+        | Card.Silver ->
+            let turn_status =
+              TurnStatus.
+                { turn_status with treasure = turn_status.treasure + 2 }
+            in
+            game.set (Turn { turn with turn_status });
+            return ()
+        | Card.Gold ->
+            let turn_status =
+              TurnStatus.
+                { turn_status with treasure = turn_status.treasure + 3 }
+            in
+            game.set (Turn { turn with turn_status });
+            Lwt.return (Ok ())
+        | Card.Cellar ->
+            let%bind turn_status = TurnStatus.expend_action turn_status in
+            let%bind cards = Play.parse Play.Cellar.t_of_yojson data in
+            let hand = Player.get_hand current_player in
+            let%bind hand_after_discarding =
+              match is_submultiset cards hand with
+              | None ->
+                  error
+                    "Your hand %s does not contain all of the cards %s"
+                    ([%yojson_of: Card.t list] hand |> Yojson.Safe.to_string)
+                    (data |> Yojson.Safe.to_string)
+              | Some hand_after_discarding -> return hand_after_discarding
+            in
+            Player.set_hand hand_after_discarding current_player;
+            Player.draw_n (List.length cards) current_player;
+            let turn_status = TurnStatus.add_actions 1 turn_status in
+            game.set (Turn { turn with turn_status });
+            return ()
+        | Card.Chapel | Card.Moat | Card.Harbinger | Card.Merchant | Card.Vassal
+        | Card.Village | Card.Workshop | Card.Bureaucrat | Card.Militia
+        | Card.Moneylender | Card.Poacher | Card.Remodel | Card.Smithy
+        | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom | Card.Festival
+        | Card.Laboratory | Card.Library | Card.Market | Card.Mine | Card.Sentry
+        | Card.Witch | Card.Artisan ->
+            failwith "unimplemented"
+      in
+      let hand = Player.get_hand current_player in
+      let discard = Player.get_discard current_player in
+      let deck = Player.get_deck current_player in
+      let TurnStatus.{ buys; actions; treasure } = turn_status in
+      Lwt.return (Ok { hand; discard; deck; supply; buys; actions; treasure })
+  | _ -> error "It is not your turn."
 
 let create () : t =
   let state, set =
