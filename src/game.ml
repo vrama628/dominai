@@ -872,11 +872,16 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
         let player = Player.add_to_discard [ card ] player in
         return { turn with current_player = { turn_status; player } }
   )
-  | Card.Village | Card.Workshop | Card.Bureaucrat | Card.Militia
-  | Card.Moneylender | Card.Poacher | Card.Remodel | Card.Smithy
-  | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom | Card.Festival
-  | Card.Laboratory | Card.Library | Card.Market | Card.Mine | Card.Sentry
-  | Card.Witch | Card.Artisan ->
+  | Card.Village ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 1 player in
+    let turn_status = TurnStatus.add_actions 2 turn_status in
+    return { turn with current_player = { player; turn_status } }
+  | Card.Workshop | Card.Bureaucrat | Card.Militia | Card.Moneylender
+  | Card.Poacher | Card.Remodel | Card.Smithy | Card.ThroneRoom | Card.Bandit
+  | Card.CouncilRoom | Card.Festival | Card.Laboratory | Card.Library
+  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
     failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :
