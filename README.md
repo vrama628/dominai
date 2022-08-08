@@ -140,6 +140,10 @@ In all other cases, the `data` field must be `null`.
     data: Card; // the card to gain
 }
 {
+    card: "Moneylender";
+    data: boolean; // whether to trash a copper for +3
+}
+{
     card: "Poacher";
     data: Card[]; // the cards to discard
 }
@@ -193,6 +197,7 @@ Request:
 Response:
 {
     play: boolean; // whether to play the card.
+    data: <see above>; // data required to play this card
 }
 
 "Library" // game to player request
