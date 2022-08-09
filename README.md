@@ -259,7 +259,20 @@ Request:
 }
 Response:
 {
-    reaction?: "Moat" | null;
+    reaction?: "Moat";
+    data?: <see below>;
+}
+```
+Depending on which card you're attacked with, you may need to supply additional
+information in the `data` field of the response if you do not react with a moat.
+The cards for which this is the case and the expected data are listed below.
+In all other cases, the `data` field must be `null` or not present.
+```
+Bureaucrat:
+{
+    data: Card | "reveal"
+    // the victory card you will topdeck, or
+    // "reveal" if you have no victory cards in your hand.
 }
 ```
 

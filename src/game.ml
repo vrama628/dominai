@@ -58,6 +58,43 @@ module Card = struct
     | ThroneRoom | Bandit | CouncilRoom | Festival | Laboratory | Library
     | Market | Mine | Sentry | Witch | Artisan ->
       true
+
+  let is_reaction = function Moat -> true | _ -> false
+
+  let cost = function
+    | Copper -> 0
+    | Silver -> 3
+    | Gold -> 6
+    | Estate -> 2
+    | Duchy -> 5
+    | Province -> 8
+    | Gardens -> 4
+    | Curse -> 0
+    | Cellar -> 2
+    | Chapel -> 2
+    | Moat -> 2
+    | Harbinger -> 3
+    | Merchant -> 3
+    | Vassal -> 3
+    | Village -> 3
+    | Workshop -> 3
+    | Bureaucrat -> 4
+    | Militia -> 4
+    | Moneylender -> 4
+    | Poacher -> 4
+    | Remodel -> 4
+    | Smithy -> 4
+    | ThroneRoom -> 4
+    | Bandit -> 5
+    | CouncilRoom -> 5
+    | Festival -> 5
+    | Laboratory -> 5
+    | Library -> 5
+    | Market -> 5
+    | Mine -> 5
+    | Sentry -> 5
+    | Witch -> 5
+    | Artisan -> 6
 end
 
 module Errorable = struct
@@ -146,7 +183,9 @@ end
 module Supply = struct
   type t = (Card.t, int, CardComparator.comparator_witness) Map.t
 
-  let supply_of_card : Card.t -> int = function Card.Gardens -> 12 | _ -> 10
+  let initial_supply_of_card : Card.t -> int = function
+    | Card.Gardens -> 12
+    | _ -> 10
 
   let create ~kingdom ~n_players : t =
     let copper =
@@ -189,7 +228,7 @@ module Supply = struct
       | _ -> failwith "unreachable"
     in
     let kingdom_supply =
-      List.map kingdom ~f:(fun card -> card, supply_of_card card)
+      List.map kingdom ~f:(fun card -> card, initial_supply_of_card card)
     in
     Map.of_alist_exn
       (module CardComparator)
@@ -210,6 +249,18 @@ module Supply = struct
            (Card.yojson_of_t key |> Yojson.Safe.to_string, `Int data) :: acc
        )
       )
+
+  let take (card : Card.t) (supply : t) : t errorable =
+    match Map.find supply card with
+    | None ->
+      error
+        "Card %s not in kingdom."
+        (Card.yojson_of_t card |> Yojson.Safe.to_string)
+    | Some n when n > 0 -> return (Map.set supply ~key:card ~data:(n - 1))
+    | _ ->
+      error
+        "No supply of %s remaining."
+        (Card.yojson_of_t card |> Yojson.Safe.to_string)
 end
 
 type turn_phase =
@@ -238,11 +289,21 @@ type game_to_player_request =
       kingdom : Card.t list;
       order : string list;
     }
+  | Attack of { card : Card.t }
   | Harbinger of { discard : Card.t list }
   | Vassal of { card : Card.t }
 [@@deriving yojson_of]
 
 module PlayerToGameResponse = struct
+  module Attack = struct
+    type data = Yojson.Safe.t
+    let data_of_yojson = Fn.id
+    type t = {
+      reaction : Card.t option; [@yojson.option]
+      data : data option; [@yojson.option]
+    }
+    [@@deriving of_yojson]
+  end
   module Harbinger = struct
     type t = { card : Card.t } [@@deriving of_yojson]
   end
@@ -878,10 +939,32 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
     let player = Player.draw_n 1 player in
     let turn_status = TurnStatus.add_actions 2 turn_status in
     return { turn with current_player = { player; turn_status } }
-  | Card.Workshop | Card.Bureaucrat | Card.Militia | Card.Moneylender
-  | Card.Poacher | Card.Remodel | Card.Smithy | Card.ThroneRoom | Card.Bandit
-  | Card.CouncilRoom | Card.Festival | Card.Laboratory | Card.Library
-  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
+  | Card.Workshop ->
+    let { player; turn_status } = current_player in
+    let%bind card = parse Play.Workshop.t_of_yojson data in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind () =
+      if Card.cost card <= 4 then
+        return ()
+      else
+        error
+          "Card %s costs more than 4."
+          (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
+    in
+    let%bind supply = Supply.take card turn.supply in
+    let player = Player.add_to_discard [ card ] player in
+    return { turn with supply; current_player = { turn_status; player } }
+  | Card.Bureaucrat ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%lwt next_players =
+      List.map turn.next_players ~f:(fun player -> failwith "TODO") |> Lwt.all
+    in
+    failwith "TODO"
+  | Card.Militia | Card.Moneylender | Card.Poacher | Card.Remodel | Card.Smithy
+  | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom | Card.Festival
+  | Card.Laboratory | Card.Library | Card.Market | Card.Mine | Card.Sentry
+  | Card.Witch | Card.Artisan ->
     failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :
