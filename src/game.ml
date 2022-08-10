@@ -265,6 +265,8 @@ module Supply = struct
       error
         "No supply of %s remaining."
         (Card.yojson_of_t card |> Yojson.Safe.to_string)
+
+  let empty_piles : t -> int = Map.count ~f:(( = ) 0)
 end
 
 type turn_phase =
@@ -318,6 +320,9 @@ module PlayerToGameResponse = struct
       let t_of_yojson : data -> t = function
         | `String "reveal" -> Reveal
         | card -> VictoryCard (Card.t_of_yojson card)
+    end
+    module Militia = struct
+      type t = Card.t list [@@deriving of_yojson]
     end
   end
   module Harbinger = struct
@@ -1014,10 +1019,82 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
         supply;
         next_players;
       }
-  | Card.Militia | Card.Moneylender | Card.Poacher | Card.Remodel | Card.Smithy
-  | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom | Card.Festival
-  | Card.Laboratory | Card.Library | Card.Market | Card.Mine | Card.Sentry
-  | Card.Witch | Card.Artisan ->
+  | Card.Militia ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%lwt next_players =
+      List.map turn.next_players ~f:(fun player ->
+          match%lwt
+            let%lwt response =
+              Player.request player (Attack { card = Card.Militia })
+            in
+            match%bind
+              parse PlayerToGameResponse.Attack.t_of_yojson response
+            with
+            | PlayerToGameResponse.Attack.{ reaction = Some card; _ } ->
+              let%bind () = react ~player ~card in
+              return player
+            | PlayerToGameResponse.Attack.{ data = Some data; _ } ->
+              let%bind cards =
+                parse PlayerToGameResponse.Attack.Militia.t_of_yojson data
+              in
+              let%bind player = Player.remove_from_hand cards player in
+              let%bind () =
+                if List.length (Player.get_hand player) <= 3 then
+                  return ()
+                else
+                  error
+                    "%d cards remaining in hand after discarding %s"
+                    (List.length (Player.get_hand player))
+                    ([%yojson_of: Card.t list] cards |> Yojson.Safe.to_string)
+              in
+              let player = Player.add_to_discard cards player in
+              return player
+            | PlayerToGameResponse.Attack.{ reaction = None; data = None } ->
+              error
+                "Militia response must have nonempty reaction or data field."
+          with
+          | Ok player -> Lwt.return (Some player)
+          | Error err ->
+            Player.fatal_error err player;
+            Lwt.return None
+      )
+      |> Lwt.all
+      |> Lwt.map List.filter_opt
+    in
+    return { turn with current_player = { player; turn_status }; next_players }
+  | Card.Moneylender ->
+    let { player; turn_status } = current_player in
+    let%bind should_trash = parse Play.Moneylender.t_of_yojson data in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    if should_trash then
+      let%bind player = Player.remove_from_hand [Card.Copper] player in
+      let trash = Card.Copper :: turn.trash in
+      return { turn with current_player = { player; turn_status }; trash }
+    else
+      return { turn with current_player = { player; turn_status } }
+  | Card.Poacher ->
+    let { player; turn_status } = current_player in
+    let%bind to_discard = parse Play.Poacher.t_of_yojson data in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind () =
+      if List.length to_discard = Supply.empty_piles turn.supply then
+        return ()
+      else
+        error
+          "Requested to discard %d cards but there are %d empty supply piles"
+          (List.length to_discard)
+          (Supply.empty_piles turn.supply)
+    in
+    let%bind player = Player.remove_from_hand to_discard player in
+    let player = Player.add_to_discard to_discard player in
+    let player = Player.draw_n 1 player in
+    let turn_status = TurnStatus.add_actions 1 turn_status in
+    let turn_status = TurnStatus.add_treasure 1 turn_status in
+    return { turn with current_player = { player; turn_status } }
+  | Card.Remodel | Card.Smithy | Card.ThroneRoom | Card.Bandit
+  | Card.CouncilRoom | Card.Festival | Card.Laboratory | Card.Library
+  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
     failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :

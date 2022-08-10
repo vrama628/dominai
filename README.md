@@ -274,6 +274,11 @@ Bureaucrat:
     // the victory card you will topdeck, or
     // "reveal" if you have no victory cards in your hand.
 }
+Militia:
+{
+    data: Card[]
+    // the cards to discard from your hand
+}
 ```
 
 When another player plays a card, the game sends you a `Played`
