@@ -8,3 +8,4 @@ if-then-else = k-r
 wrap-fun-args = false
 break-fun-decl = fit-or-vertical
 cases-exp-indent = 2
+space-around-lists = false

@@ -45,10 +45,10 @@ module Card = struct
 
   let yojson_of_t card =
     match yojson_of_t card with
-    | `List [ name ] -> name
+    | `List [name] -> name
     | _ -> failwith "unreachable"
 
-  let t_of_yojson json = t_of_yojson (`List [ json ])
+  let t_of_yojson json = t_of_yojson (`List [json])
 
   let is_action = function
     | Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse ->
@@ -60,6 +60,10 @@ module Card = struct
       true
 
   let is_reaction = function Moat -> true | _ -> false
+
+  let is_victory = function
+    | Estate | Duchy | Province | Gardens -> true
+    | _ -> false
 
   let cost = function
     | Copper -> 0
@@ -281,7 +285,9 @@ type turn_info = {
 }
 [@@deriving yojson_of]
 
-type game_to_player_notification = StartTurn of turn_info
+type game_to_player_notification =
+  | StartTurn of turn_info
+  | FatalError of { message : string }
 [@@deriving yojson_of]
 
 type game_to_player_request =
@@ -303,6 +309,16 @@ module PlayerToGameResponse = struct
       data : data option; [@yojson.option]
     }
     [@@deriving of_yojson]
+
+    module Bureaucrat = struct
+      type t =
+        | Reveal
+        | VictoryCard of Card.t
+
+      let t_of_yojson : data -> t = function
+        | `String "reveal" -> Reveal
+        | card -> VictoryCard (Card.t_of_yojson card)
+    end
   end
   module Harbinger = struct
     type t = { card : Card.t } [@@deriving of_yojson]
@@ -325,7 +341,7 @@ type player_to_game_request =
 [@@deriving of_yojson]
 
 let method_and_params_of_json = function
-  | `List [ `String method_; `Assoc params ] -> method_, `Assoc params
+  | `List [`String method_; `Assoc params] -> method_, `Assoc params
   | _ -> failwith "unreachable"
 
 let json_of_method_and_params ~method_ ~params =
@@ -563,6 +579,12 @@ module Player = struct
         |> Yojson.Safe.to_string
         |> Dream.send websocket
     )
+
+  (** notifies and disconnects the player *)
+  let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
+    let Jsonrpc.Response.Error.{ message; _ } = error in
+    notify player (FatalError { message });
+    Lwt.wakeup player.resolver ()
 end
 
 module TurnStatus = struct
@@ -663,7 +685,7 @@ module CurrentPlayer = struct
   (** moves card from hand into play
     * does NOT handle expending actions, adding treasure, etc *)
   let play_card (card : Card.t) { player; turn_status } : t errorable =
-    let%bind player = Player.remove_from_hand [ card ] player in
+    let%bind player = Player.remove_from_hand [card] player in
     let turn_status = TurnStatus.into_play card turn_status in
     return { player; turn_status }
 
@@ -766,7 +788,7 @@ let clean_up ~(game : t) ~(name : string) : clean_up_response errorable =
       let deck = Player.get_deck prev_player in
       { hand; discard; deck; supply }
     in
-    let next_players = next_players @ [ prev_player ] in
+    let next_players = next_players @ [prev_player] in
     Lwt.async (fun () ->
         start_turn
           ~game
@@ -796,6 +818,15 @@ let start_game ~(game : t) ~(players : Player.t list) : unit Lwt.t =
       )
   in
   start_turn ~game ~kingdom ~supply ~trash ~player ~next_players
+
+let react ~(player : Player.t) ~(card : Card.t) : unit errorable =
+  if Card.is_reaction card then
+    let%bind _ = Player.remove_from_hand [card] player in
+    return ()
+  else
+    error
+      "Cannot react with %s; it is not a reaction card."
+      (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
 
 type play_response = turn_info [@@deriving yojson_of]
 
@@ -904,7 +935,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
         let turn = { turn with current_player = { player; turn_status } } in
         play_card ~turn ~card ~data
       else
-        let player = Player.add_to_discard [ card ] player in
+        let player = Player.add_to_discard [card] player in
         return { turn with current_player = { turn_status; player } }
   )
   | Card.Village ->
@@ -926,15 +957,63 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
           (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
     in
     let%bind supply = Supply.take card turn.supply in
-    let player = Player.add_to_discard [ card ] player in
+    let player = Player.add_to_discard [card] player in
     return { turn with supply; current_player = { turn_status; player } }
   | Card.Bureaucrat ->
     let { player; turn_status } = current_player in
     let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind supply = Supply.take Card.Silver turn.supply in
+    let player = Player.topdeck Card.Silver player in
     let%lwt next_players =
-      List.map turn.next_players ~f:(fun player -> failwith "TODO") |> Lwt.all
+      List.map turn.next_players ~f:(fun player ->
+          match%lwt
+            let%lwt response =
+              Player.request player (Attack { card = Card.Bureaucrat })
+            in
+            match%bind
+              parse PlayerToGameResponse.Attack.t_of_yojson response
+            with
+            | PlayerToGameResponse.Attack.{ reaction = Some card; _ } ->
+              let%bind () = react ~player ~card in
+              return player
+            | PlayerToGameResponse.Attack.{ data = Some data; _ } -> (
+              match%bind
+                parse PlayerToGameResponse.Attack.Bureaucrat.t_of_yojson data
+              with
+              | PlayerToGameResponse.Attack.Bureaucrat.Reveal ->
+                if List.exists (Player.get_hand player) ~f:Card.is_victory then
+                  error "Cannot reveal hand; hand contains a victory card."
+                else
+                  return player (* TODO: reveal *)
+              | PlayerToGameResponse.Attack.Bureaucrat.VictoryCard card ->
+                if Card.is_victory card then
+                  let%bind player = Player.remove_from_hand [card] player in
+                  let player = Player.topdeck card player in
+                  return player
+                else
+                  error
+                    "Cannot topdeck %s; is not a victory card."
+                    (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
+            )
+            | PlayerToGameResponse.Attack.{ reaction = None; data = None } ->
+              error
+                "Bureaucrat response must have nonempty reaction or data field."
+          with
+          | Ok player -> Lwt.return (Some player)
+          | Error err ->
+            Player.fatal_error err player;
+            Lwt.return None
+      )
+      |> Lwt.all
+      |> Lwt.map List.filter_opt
     in
-    failwith "TODO"
+    return
+      {
+        turn with
+        current_player = { player; turn_status };
+        supply;
+        next_players;
+      }
   | Card.Militia | Card.Moneylender | Card.Poacher | Card.Remodel | Card.Smithy
   | Card.ThroneRoom | Card.Bandit | Card.CouncilRoom | Card.Festival
   | Card.Laboratory | Card.Library | Card.Market | Card.Mine | Card.Sentry

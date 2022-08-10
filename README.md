@@ -289,6 +289,19 @@ Notification:
 }
 ```
 
+When you send the game malformed data,
+the game sends you a `FatalError` notification
+then immediately forfeits and disconnects you from the game.
+
+### `FatalError`
+```
+"FatalError" // game to player notification
+Notification:
+{
+    message: string;
+}
+```
+
 When your discard pile is shuffled, the game sends you a `Shuffle` notification.
 
 ### `Shuffle`
