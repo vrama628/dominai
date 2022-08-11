@@ -50,6 +50,9 @@ module Card = struct
 
   let t_of_yojson json = t_of_yojson (`List [json])
 
+  let to_string (card : t) : string =
+    card |> yojson_of_t |> Yojson.Safe.to_string
+
   let is_action = function
     | Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse ->
       false
@@ -64,6 +67,8 @@ module Card = struct
   let is_victory = function
     | Estate | Duchy | Province | Gardens -> true
     | _ -> false
+
+  let is_treasure = function Copper | Silver | Gold -> true | _ -> false
 
   let cost = function
     | Copper -> 0
@@ -123,49 +128,54 @@ module Errorable = struct
 end
 open Errorable
 
+type data = Yojson.Safe.t
+let data_of_yojson = Fn.id
+let yojson_of_data = Fn.id
+
 module Play = struct
   module Cellar = struct
-    type t = Card.t list [@@deriving yojson]
+    type t = Card.t list [@@deriving of_yojson]
   end
   module Chapel = struct
-    type t = Card.t list [@@deriving yojson]
+    type t = Card.t list [@@deriving of_yojson]
   end
   module Workshop = struct
-    type t = Card.t [@@deriving yojson]
+    type t = Card.t [@@deriving of_yojson]
   end
   module Moneylender = struct
-    type t = bool [@@deriving yojson]
+    type t = bool [@@deriving of_yojson]
   end
   module Poacher = struct
-    type t = Card.t list [@@deriving yojson]
+    type t = Card.t list [@@deriving of_yojson]
   end
   module Remodel = struct
     type t = {
       trash : Card.t;
       gain : Card.t;
     }
-    [@@deriving yojson]
+    [@@deriving of_yojson]
   end
   module ThroneRoom = struct
-    type t = Card.t [@@deriving yojson]
+    type t = {
+      card : Card.t;
+      data : data;
+    }
+    [@@deriving of_yojson]
   end
   module Mine = struct
     type t = {
       trash : Card.t;
       gain : Card.t;
     }
-    [@@deriving yojson]
+    [@@deriving of_yojson]
   end
   module Artisan = struct
     type t = {
       gain : Card.t;
       topdeck : Card.t;
     }
-    [@@deriving yojson]
+    [@@deriving of_yojson]
   end
-
-  type data = Yojson.Safe.t
-  let data_of_yojson = Fn.id
 end
 
 let parse (t_of_yojson : Yojson.Safe.t -> 'a) (data : Yojson.Safe.t) :
@@ -250,21 +260,16 @@ module Supply = struct
   let yojson_of_t (supply : t) : Yojson.Safe.t =
     `Assoc
       (Map.fold supply ~init:[] ~f:(fun ~key ~data acc ->
-           (Card.yojson_of_t key |> Yojson.Safe.to_string, `Int data) :: acc
+           (Card.yojson_of_t key |> Yojson.Safe.Util.to_string, `Int data)
+           :: acc
        )
       )
 
   let take (card : Card.t) (supply : t) : t errorable =
     match Map.find supply card with
-    | None ->
-      error
-        "Card %s not in kingdom."
-        (Card.yojson_of_t card |> Yojson.Safe.to_string)
+    | None -> error "Card %s not in kingdom." (Card.to_string card)
     | Some n when n > 0 -> return (Map.set supply ~key:card ~data:(n - 1))
-    | _ ->
-      error
-        "No supply of %s remaining."
-        (Card.yojson_of_t card |> Yojson.Safe.to_string)
+    | _ -> error "No supply of %s remaining." (Card.to_string card)
 
   let empty_piles : t -> int = Map.count ~f:(( = ) 0)
 end
@@ -274,11 +279,14 @@ type turn_phase =
   | Buy
 [@@deriving yojson_of]
 
+type trash = Card.t list [@@deriving yojson_of]
+
 type turn_info = {
   hand : Card.t list;
   discard : int;
   deck : int;
   supply : Supply.t;
+  trash : trash;
   buys : int;
   actions : int;
   treasure : int;
@@ -292,20 +300,30 @@ type game_to_player_notification =
   | FatalError of { message : string }
 [@@deriving yojson_of]
 
+(* TODO: move into module *)
 type game_to_player_request =
   | StartGame of {
       kingdom : Card.t list;
       order : string list;
     }
-  | Attack of { card : Card.t }
+  | Attack of {
+      card : Card.t;
+      data : data;
+    }
   | Harbinger of { discard : Card.t list }
   | Vassal of { card : Card.t }
 [@@deriving yojson_of]
 
+module GameToPlayerRequest = struct
+  module Attack = struct
+    module Bandit = struct
+      type t = Card.t list [@@deriving yojson_of]
+    end
+  end
+end
+
 module PlayerToGameResponse = struct
   module Attack = struct
-    type data = Yojson.Safe.t
-    let data_of_yojson = Fn.id
     type t = {
       reaction : Card.t option; [@yojson.option]
       data : data option; [@yojson.option]
@@ -324,6 +342,9 @@ module PlayerToGameResponse = struct
     module Militia = struct
       type t = Card.t list [@@deriving of_yojson]
     end
+    module Bandit = struct
+      type t = Card.t option [@@deriving of_yojson]
+    end
   end
   module Harbinger = struct
     type t = { card : Card.t } [@@deriving of_yojson]
@@ -331,7 +352,7 @@ module PlayerToGameResponse = struct
   module Vassal = struct
     type t = {
       play : bool;
-      data : Play.data;
+      data : data;
     }
     [@@deriving of_yojson]
   end
@@ -341,7 +362,8 @@ type player_to_game_request =
   | CleanUp of unit
   | Play of {
       card : Card.t;
-      data : Play.data;
+      (* TODO: move data entirely to separate requests *)
+      data : data;
     }
 [@@deriving of_yojson]
 
@@ -674,12 +696,14 @@ module CurrentPlayer = struct
           TurnStatus.
             { buys; actions; treasure; in_play; phase; pending_merchants = _ };
       }
-      ~supply : turn_info =
+      ~(supply : Supply.t)
+      ~(trash : trash) : turn_info =
     {
       hand = Player.get_hand player;
       discard = Player.get_discard player;
       deck = Player.get_deck player;
       supply;
+      trash;
       buys;
       actions;
       treasure;
@@ -693,6 +717,13 @@ module CurrentPlayer = struct
     let%bind player = Player.remove_from_hand [card] player in
     let turn_status = TurnStatus.into_play card turn_status in
     return { player; turn_status }
+
+  (** Only used by Throne Room.
+      Precondition: specified card is in play *)
+  let unplay_card (card : Card.t) { player; turn_status } : t =
+    let in_play = Option.value_exn (find_and_remove card turn_status.in_play) in
+    let player = Player.add_to_hand card player in
+    { player; turn_status = { turn_status with in_play } }
 
   (* destructor *)
   let clean_up { player; turn_status } : Player.t =
@@ -763,7 +794,7 @@ let start_turn
   game.set (Turn { kingdom; supply; trash; current_player; next_players });
   Player.notify
     player
-    (StartTurn (CurrentPlayer.turn_info current_player ~supply));
+    (StartTurn (CurrentPlayer.turn_info current_player ~supply ~trash));
   Lwt.return_unit
 
 type clean_up_response = {
@@ -831,11 +862,11 @@ let react ~(player : Player.t) ~(card : Card.t) : unit errorable =
   else
     error
       "Cannot react with %s; it is not a reaction card."
-      (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
+      (Card.to_string card)
 
 type play_response = turn_info [@@deriving yojson_of]
 
-let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
+let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     turn errorable =
   let%bind current_player = CurrentPlayer.play_card card turn.current_player in
   match card with
@@ -903,10 +934,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
     in
     let%bind discard =
       match find_and_remove card discard with
-      | None ->
-        error
-          "Card %s not in discard pile."
-          (Card.yojson_of_t card |> Yojson.Safe.to_string)
+      | None -> error "Card %s not in discard pile." (Card.to_string card)
       | Some discard -> return discard
     in
     let player = { player with cards = { player.cards with discard } } in
@@ -957,9 +985,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
       if Card.cost card <= 4 then
         return ()
       else
-        error
-          "Card %s costs more than 4."
-          (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
+        error "Card %s costs more than 4." (Card.to_string card)
     in
     let%bind supply = Supply.take card turn.supply in
     let player = Player.add_to_discard [card] player in
@@ -973,7 +999,9 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
       List.map turn.next_players ~f:(fun player ->
           match%lwt
             let%lwt response =
-              Player.request player (Attack { card = Card.Bureaucrat })
+              Player.request
+                player
+                (Attack { card = Card.Bureaucrat; data = `Null })
             in
             match%bind
               parse PlayerToGameResponse.Attack.t_of_yojson response
@@ -998,7 +1026,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
                 else
                   error
                     "Cannot topdeck %s; is not a victory card."
-                    (card |> Card.yojson_of_t |> Yojson.Safe.to_string)
+                    (Card.to_string card)
             )
             | PlayerToGameResponse.Attack.{ reaction = None; data = None } ->
               error
@@ -1026,7 +1054,9 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
       List.map turn.next_players ~f:(fun player ->
           match%lwt
             let%lwt response =
-              Player.request player (Attack { card = Card.Militia })
+              Player.request
+                player
+                (Attack { card = Card.Militia; data = `Null })
             in
             match%bind
               parse PlayerToGameResponse.Attack.t_of_yojson response
@@ -1074,6 +1104,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
     else
       return { turn with current_player = { player; turn_status } }
   | Card.Poacher ->
+    (* TODO: draw card before discarding *)
     let { player; turn_status } = current_player in
     let%bind to_discard = parse Play.Poacher.t_of_yojson data in
     let%bind turn_status = TurnStatus.expend_action turn_status in
@@ -1092,18 +1123,184 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : Play.data) :
     let turn_status = TurnStatus.add_actions 1 turn_status in
     let turn_status = TurnStatus.add_treasure 1 turn_status in
     return { turn with current_player = { player; turn_status } }
-  | Card.Remodel | Card.Smithy | Card.ThroneRoom | Card.Bandit
-  | Card.CouncilRoom | Card.Festival | Card.Laboratory | Card.Library
-  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
+  | Card.Remodel ->
+    let { player; turn_status } = current_player in
+    let%bind Play.Remodel.{ trash = to_trash; gain = to_gain } =
+      parse Play.Remodel.t_of_yojson data
+    in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind () =
+      if Card.cost to_gain - Card.cost to_trash <= 2 then
+        return ()
+      else
+        error
+          "%s costs %d more than %s."
+          (Card.to_string to_gain)
+          (Card.cost to_gain - Card.cost to_trash)
+          (Card.to_string to_trash)
+    in
+    let%bind player = Player.remove_from_hand [to_trash] player in
+    let trash = to_trash :: turn.trash in
+    let%bind supply = Supply.take to_gain turn.supply in
+    let player = Player.add_to_discard [to_gain] player in
+    return { turn with current_player = { player; turn_status }; trash; supply }
+  | Card.Smithy ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 3 player in
+    return { turn with current_player = { player; turn_status } }
+  | Card.ThroneRoom ->
+    (* TODO allow data to differ between two card invocations *)
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind Play.ThroneRoom.{ card; data } =
+      parse Play.ThroneRoom.t_of_yojson data
+    in
+    let turn_status = TurnStatus.add_actions 1 turn_status in
+    let turn = { turn with current_player = { player; turn_status } } in
+    let%bind turn = play_card ~turn ~card ~data in
+    let turn =
+      let current_player = CurrentPlayer.unplay_card card turn.current_player in
+      let turn_status = TurnStatus.add_actions 1 current_player.turn_status in
+      { turn with current_player = { current_player with turn_status } }
+    in
+    let%bind turn = play_card ~turn ~card ~data in
+    return turn
+  | Card.Bandit ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    (* NOTE: if there are no golds left, the attack won't go through. *)
+    let%bind supply = Supply.take Card.Gold turn.supply in
+    let player = Player.add_to_discard [Card.Gold] player in
+    let (add_to_trashed, trash_trashed) : (Card.t -> unit) * (trash -> trash) =
+      let trashed = ref [] in
+      let add_to_trashed card = Ref.replace trashed (List.cons card) in
+      let trash_trashed trash = !trashed @ trash in
+      add_to_trashed, trash_trashed
+    in
+    let%lwt next_players =
+      List.map turn.next_players ~f:(fun player ->
+          match%lwt
+            let revealed1, player =
+              let take_result = Player.take_from_deck player in
+              ( Option.map take_result ~f:fst,
+                Option.value_map take_result ~default:player ~f:snd )
+            in
+            let revealed2, player =
+              let take_result = Player.take_from_deck player in
+              ( Option.map take_result ~f:fst,
+                Option.value_map take_result ~default:player ~f:snd )
+            in
+            let revealed = List.filter_opt [revealed1; revealed2] in
+            let%lwt response =
+              Player.request
+                player
+                (Attack
+                   {
+                     card = Card.Bandit;
+                     data =
+                       GameToPlayerRequest.Attack.Bandit.yojson_of_t revealed;
+                   }
+                )
+            in
+            match%bind
+              parse PlayerToGameResponse.Attack.t_of_yojson response
+            with
+            | PlayerToGameResponse.Attack.{ reaction = Some card; _ } ->
+              let%bind () = react ~player ~card in
+              return player
+            | PlayerToGameResponse.Attack.{ data = Some data; _ } -> (
+              let%bind to_trash =
+                parse PlayerToGameResponse.Attack.Bandit.t_of_yojson data
+              in
+              let is_non_copper_treasure card =
+                Card.is_treasure card && not (Card.equal card Card.Copper)
+              in
+              let non_copper_treasure_was_revealed =
+                List.exists revealed ~f:is_non_copper_treasure
+              in
+              match non_copper_treasure_was_revealed, to_trash with
+              | true, None ->
+                error
+                  "You must select one of the revealed non-copper treasures to \
+                   trash."
+              | false, Some selection ->
+                error
+                  "You may not trash %s, as the bandit did not reveal a \
+                   non-copper treasure."
+                  (Card.to_string selection)
+              | true, Some selection ->
+                let%bind to_discard =
+                  match find_and_remove selection revealed with
+                  | Some to_discard -> return to_discard
+                  | None ->
+                    error
+                      "%s is not a card that was revealed by the bandit."
+                      (Card.to_string selection)
+                in
+                let player = Player.add_to_discard to_discard player in
+                add_to_trashed selection;
+                return player
+              | false, None ->
+                let player = Player.add_to_discard revealed player in
+                return player
+            )
+            | PlayerToGameResponse.Attack.{ reaction = None; data = None } ->
+              error "Bandit response must have nonempty reaction or data field."
+          with
+          | Ok player -> Lwt.return (Some player)
+          | Error err ->
+            Player.fatal_error err player;
+            Lwt.return None
+      )
+      |> Lwt.all
+      |> Lwt.map List.filter_opt
+    in
+    let trash = trash_trashed turn.trash in
+    return
+      {
+        turn with
+        current_player = { player; turn_status };
+        next_players;
+        trash;
+        supply;
+      }
+  | Card.CouncilRoom ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 4 player in
+    let turn_status = TurnStatus.add_buys 1 turn_status in
+    let next_players = List.map turn.next_players ~f:(Player.draw_n 1) in
+    return { turn with current_player = { player; turn_status }; next_players }
+  | Card.Festival ->
+    let { turn_status; _ } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let turn_status = TurnStatus.add_actions 2 turn_status in
+    let turn_status = TurnStatus.add_buys 1 turn_status in
+    let turn_status = TurnStatus.add_treasure 2 turn_status in
+    return { turn with current_player = { current_player with turn_status } }
+  | Card.Laboratory ->
+    let { turn_status; player } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 2 player in
+    let turn_status = TurnStatus.add_actions 1 turn_status in
+    return { turn with current_player = { turn_status; player } }
+  | Card.Library | Card.Market | Card.Mine | Card.Sentry | Card.Witch
+  | Card.Artisan ->
     failwith "unimplemented"
 
-let play ~(game : t) ~(card : Card.t) ~(data : Play.data) ~(name : string) :
+let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
     play_response errorable =
   match React.S.value game.state with
   | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
     let%bind turn = play_card ~turn ~card ~data in
     game.set (Turn turn);
-    return (CurrentPlayer.turn_info ~supply:turn.supply turn.current_player)
+    return
+      (CurrentPlayer.turn_info
+         ~supply:turn.supply
+         ~trash:turn.trash
+         turn.current_player
+      )
   | _ -> error "It is not your turn."
 
 let create () : t =
