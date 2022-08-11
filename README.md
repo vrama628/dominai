@@ -207,6 +207,7 @@ Response:
 Request:
 {
     card: Card; // an action card that you may choose to skip
+    hand: Card[]; // the current contents of your hand
 }
 Response:
 {

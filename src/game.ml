@@ -291,6 +291,7 @@ type turn_info = {
   actions : int;
   treasure : int;
   in_play : Card.t list;
+  set_aside : Card.t list;
   phase : turn_phase;
 }
 [@@deriving yojson_of]
@@ -312,6 +313,10 @@ type game_to_player_request =
     }
   | Harbinger of { discard : Card.t list }
   | Vassal of { card : Card.t }
+  | Library of {
+      card : Card.t;
+      hand : Card.t list;
+    }
 [@@deriving yojson_of]
 
 module GameToPlayerRequest = struct
@@ -355,6 +360,9 @@ module PlayerToGameResponse = struct
       data : data;
     }
     [@@deriving of_yojson]
+  end
+  module Library = struct
+    type t = { skip : bool } [@@deriving of_yojson]
   end
 end
 
@@ -440,8 +448,11 @@ module Player = struct
 
     let draw_n (n : int) : t -> t = Fn.apply_n_times ~n draw
 
-    let clean_up ~(in_play : Card.t list) { deck; hand; discard } =
-      let discard = in_play @ hand @ discard in
+    let clean_up
+        ~(in_play : Card.t list)
+        ~(set_aside : Card.t list)
+        { deck; hand; discard } =
+      let discard = in_play @ set_aside @ hand @ discard in
       let hand = [] in
       draw_n 5 { deck; hand; discard }
 
@@ -553,8 +564,9 @@ module Player = struct
   let draw_n (n : int) (player : t) : t =
     { player with cards = Cards.draw_n n player.cards }
 
-  let clean_up ~in_play (player : t) : t =
-    { player with cards = Cards.clean_up ~in_play player.cards }
+  let clean_up ~(in_play : Card.t list) ~(set_aside : Card.t list) (player : t)
+      : t =
+    { player with cards = Cards.clean_up ~in_play ~set_aside player.cards }
 
   let remove_from_hand (to_remove : Card.t list) (player : t) : t errorable =
     let%bind cards = Cards.remove_from_hand to_remove player.cards in
@@ -620,6 +632,7 @@ module TurnStatus = struct
     actions : int;
     treasure : int;
     in_play : Card.t list;
+    set_aside : Card.t list;
     pending_merchants : int;
     phase : turn_phase;
   }
@@ -629,9 +642,10 @@ module TurnStatus = struct
     let actions = 1 in
     let treasure = 0 in
     let in_play = [] in
+    let set_aside = [] in
     let pending_merchants = 0 in
     let phase = Action in
-    { buys; actions; treasure; in_play; pending_merchants; phase }
+    { buys; actions; treasure; in_play; set_aside; pending_merchants; phase }
 
   let add_buys (n : int) turn_status : t =
     { turn_status with buys = turn_status.buys + n }
@@ -669,6 +683,9 @@ module TurnStatus = struct
   let into_play (card : Card.t) (turn_status : t) : t =
     { turn_status with in_play = card :: turn_status.in_play }
 
+  let set_aside (card : Card.t) (turn_status : t) : t =
+    { turn_status with set_aside = card :: turn_status.set_aside }
+
   let pend_merchant (turn_status : t) : t =
     { turn_status with pending_merchants = turn_status.pending_merchants + 1 }
 
@@ -694,7 +711,15 @@ module CurrentPlayer = struct
         player;
         turn_status =
           TurnStatus.
-            { buys; actions; treasure; in_play; phase; pending_merchants = _ };
+            {
+              buys;
+              actions;
+              treasure;
+              in_play;
+              set_aside;
+              phase;
+              pending_merchants = _;
+            };
       }
       ~(supply : Supply.t)
       ~(trash : trash) : turn_info =
@@ -708,6 +733,7 @@ module CurrentPlayer = struct
       actions;
       treasure;
       in_play;
+      set_aside;
       phase;
     }
 
@@ -727,8 +753,8 @@ module CurrentPlayer = struct
 
   (* destructor *)
   let clean_up { player; turn_status } : Player.t =
-    let TurnStatus.{ in_play; _ } = turn_status in
-    Player.clean_up ~in_play player
+    let TurnStatus.{ in_play; set_aside; _ } = turn_status in
+    Player.clean_up ~in_play ~set_aside player
 end
 open CurrentPlayer
 
@@ -1285,8 +1311,44 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let player = Player.draw_n 2 player in
     let turn_status = TurnStatus.add_actions 1 turn_status in
     return { turn with current_player = { turn_status; player } }
-  | Card.Library | Card.Market | Card.Mine | Card.Sentry | Card.Witch
-  | Card.Artisan ->
+  | Card.Library ->
+    let rec draw_until_7 (current_player : CurrentPlayer.t) :
+        CurrentPlayer.t errorable =
+      if List.length (Player.get_hand current_player.player) >= 7 then
+        return current_player
+      else
+        match Player.take_from_deck current_player.player with
+        | None -> return current_player
+        | Some (card, player) ->
+          if Card.is_action card then
+            let%lwt response =
+              Player.request
+                player
+                (Library { card; hand = Player.get_hand player })
+            in
+            let%bind PlayerToGameResponse.Library.{ skip } =
+              parse PlayerToGameResponse.Library.t_of_yojson response
+            in
+            if skip then
+              let turn_status =
+                TurnStatus.set_aside card current_player.turn_status
+              in
+              return { current_player with turn_status }
+            else
+              let player = Player.add_to_hand card player in
+              draw_until_7 { current_player with player }
+          else
+            let player = Player.add_to_hand card player in
+            draw_until_7 { current_player with player }
+    in
+    let%bind turn_status =
+      TurnStatus.expend_action current_player.turn_status
+    in
+    let%bind current_player =
+      draw_until_7 { current_player with turn_status }
+    in
+    return { turn with current_player }
+  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
     failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
