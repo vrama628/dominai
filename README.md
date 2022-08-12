@@ -145,7 +145,6 @@ In all other cases, the `data` field must be `null`.
 }
 {
     card: "Poacher";
-    data: Card[]; // the cards to discard
 }
 {
     card: "Remodel";
@@ -201,6 +200,17 @@ Response:
 {
     play: boolean; // whether to play the card.
     data: <see above>; // data required to play this card
+}
+
+"Poacher" // game to player request
+Request:
+{
+    hand: Card[]; // your current hand
+    empty_supply_piles: number; // the number of cards you must discard
+}
+Response:
+{
+    discard: Card[]; // the cards to discard from your hand
 }
 
 "Library" // game to player request

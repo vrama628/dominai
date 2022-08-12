@@ -160,9 +160,6 @@ module Play = struct
   module Moneylender = struct
     type t = bool [@@deriving of_yojson]
   end
-  module Poacher = struct
-    type t = Card.t list [@@deriving of_yojson]
-  end
   module Remodel = struct
     type t = {
       trash : Card.t;
@@ -327,6 +324,10 @@ type game_to_player_request =
     }
   | Harbinger of { discard : Card.t list }
   | Vassal of { card : Card.t }
+  | Poacher of {
+      hand : Card.t list;
+      empty_supply_piles : int;
+    }
   | Library of {
       card : Card.t;
       hand : Card.t list;
@@ -374,6 +375,9 @@ module PlayerToGameResponse = struct
       data : data;
     }
     [@@deriving of_yojson]
+  end
+  module Poacher = struct
+    type t = { discard : Card.t list } [@@deriving of_yojson]
   end
   module Library = struct
     type t = { skip : bool } [@@deriving of_yojson]
@@ -1124,22 +1128,35 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     else
       return { turn with current_player = { player; turn_status } }
   | Card.Poacher ->
-    (* TODO: draw card before discarding *)
     let { player; turn_status } = current_player in
-    let%bind to_discard = parse Play.Poacher.t_of_yojson data in
     let%bind turn_status = TurnStatus.expend_action turn_status in
-    let%bind () =
-      ensure
-        (List.length to_discard = Supply.empty_piles turn.supply)
-        "Requested to discard %d cards but there are %d empty supply piles"
-        (List.length to_discard)
-        (Supply.empty_piles turn.supply)
-    in
-    let%bind player = Player.remove_from_hand to_discard player in
-    let player = Player.add_to_discard to_discard player in
     let player = Player.draw_n 1 player in
     let turn_status = TurnStatus.add_actions 1 turn_status in
     let turn_status = TurnStatus.add_treasure 1 turn_status in
+    let empty_supply_piles = Supply.empty_piles turn.supply in
+    let%bind player =
+      if empty_supply_piles > 0 then
+        let%lwt response =
+          Player.request
+            player
+            (Poacher { hand = Player.get_hand player; empty_supply_piles })
+        in
+        let%bind PlayerToGameResponse.Poacher.{ discard } =
+          parse PlayerToGameResponse.Poacher.t_of_yojson response
+        in
+        let%bind () =
+          ensure
+            (List.length discard = empty_supply_piles)
+            "Requested to discard %d cards but there are %d empty supply piles"
+            (List.length discard)
+            (Supply.empty_piles turn.supply)
+        in
+        let%bind player = Player.remove_from_hand discard player in
+        let player = Player.add_to_discard discard player in
+        return player
+      else
+        return player
+    in
     return { turn with current_player = { player; turn_status } }
   | Card.Remodel ->
     let { player; turn_status } = current_player in
