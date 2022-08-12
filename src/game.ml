@@ -121,6 +121,21 @@ module Errorable = struct
       )
       fmt
 
+  let ensure
+      (condition : bool)
+      (fmt : ('r, unit, string, unit errorable) format4) : 'r =
+    Printf.ksprintf
+      (fun message ->
+        Lwt.return
+          ( if condition then
+            Ok ()
+          else
+            Error
+              Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
+          )
+      )
+      fmt
+
   module Let_syntax = struct
     let bind (x : 'a errorable) ~(f : 'a -> 'b errorable) : 'b errorable =
       match%lwt x with Ok y -> f y | Error e -> Lwt.return (Error e)
@@ -989,10 +1004,10 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let%bind card = parse Play.Workshop.t_of_yojson data in
     let%bind turn_status = TurnStatus.expend_action turn_status in
     let%bind () =
-      if Card.cost card <= 4 then
-        return ()
-      else
-        error "Card %s costs more than 4." (Card.to_string card)
+      ensure
+        (Card.cost card <= 4)
+        "Card %s costs more than 4."
+        (Card.to_string card)
     in
     let%bind supply = Supply.take card turn.supply in
     let player = Player.add_to_discard [card] player in
@@ -1077,13 +1092,11 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
               in
               let%bind player = Player.remove_from_hand cards player in
               let%bind () =
-                if List.length (Player.get_hand player) <= 3 then
-                  return ()
-                else
-                  error
-                    "%d cards remaining in hand after discarding %s"
-                    (List.length (Player.get_hand player))
-                    ([%yojson_of: Card.t list] cards |> Yojson.Safe.to_string)
+                ensure
+                  (List.length (Player.get_hand player) <= 3)
+                  "%d cards remaining in hand after discarding %s"
+                  (List.length (Player.get_hand player))
+                  ([%yojson_of: Card.t list] cards |> Yojson.Safe.to_string)
               in
               let player = Player.add_to_discard cards player in
               return player
@@ -1116,13 +1129,11 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let%bind to_discard = parse Play.Poacher.t_of_yojson data in
     let%bind turn_status = TurnStatus.expend_action turn_status in
     let%bind () =
-      if List.length to_discard = Supply.empty_piles turn.supply then
-        return ()
-      else
-        error
-          "Requested to discard %d cards but there are %d empty supply piles"
-          (List.length to_discard)
-          (Supply.empty_piles turn.supply)
+      ensure
+        (List.length to_discard = Supply.empty_piles turn.supply)
+        "Requested to discard %d cards but there are %d empty supply piles"
+        (List.length to_discard)
+        (Supply.empty_piles turn.supply)
     in
     let%bind player = Player.remove_from_hand to_discard player in
     let player = Player.add_to_discard to_discard player in
@@ -1137,14 +1148,12 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     in
     let%bind turn_status = TurnStatus.expend_action turn_status in
     let%bind () =
-      if Card.cost to_gain - Card.cost to_trash <= 2 then
-        return ()
-      else
-        error
-          "%s costs %d more than %s."
-          (Card.to_string to_gain)
-          (Card.cost to_gain - Card.cost to_trash)
-          (Card.to_string to_trash)
+      ensure
+        (Card.cost to_gain - Card.cost to_trash <= 2)
+        "%s costs %d more than %s."
+        (Card.to_string to_gain)
+        (Card.cost to_gain - Card.cost to_trash)
+        (Card.to_string to_trash)
     in
     let%bind player = Player.remove_from_hand [to_trash] player in
     let trash = to_trash :: turn.trash in
@@ -1324,8 +1333,46 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let%bind turn_status = TurnStatus.expend_action turn_status in
     let%bind player = draw_until_7 player in
     return { turn with current_player = { turn_status; player } }
-  | Card.Market | Card.Mine | Card.Sentry | Card.Witch | Card.Artisan ->
-    failwith "unimplemented"
+  | Card.Market ->
+    let { turn_status; player } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 1 player in
+    let turn_status = TurnStatus.add_actions 1 turn_status in
+    let turn_status = TurnStatus.add_buys 1 turn_status in
+    let turn_status = TurnStatus.add_treasure 1 turn_status in
+    return { turn with current_player = { turn_status; player } }
+  | Card.Mine ->
+    let { turn_status; player } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind Play.Mine.{ trash = to_trash; gain = to_gain } =
+      parse Play.Mine.t_of_yojson data
+    in
+    let%bind () =
+      ensure
+        (Card.is_treasure to_trash)
+        "%s is not a treasure."
+        (Card.to_string to_trash)
+    in
+    let%bind () =
+      ensure
+        (Card.is_treasure to_gain)
+        "%s is not a treasure."
+        (Card.to_string to_gain)
+    in
+    let%bind () =
+      ensure
+        (Card.cost to_gain - Card.cost to_trash <= 3)
+        "%s costs %d more than %s."
+        (Card.to_string to_gain)
+        (Card.cost to_gain - Card.cost to_trash)
+        (Card.to_string to_trash)
+    in
+    let%bind player = Player.remove_from_hand [to_trash] player in
+    let trash = to_trash :: turn.trash in
+    let%bind supply = Supply.take to_gain turn.supply in
+    let player = Player.add_to_hand to_gain player in
+    return { turn with current_player = { player; turn_status }; trash; supply }
+  | Card.Sentry | Card.Witch | Card.Artisan -> failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
     play_response errorable =
