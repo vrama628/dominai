@@ -157,7 +157,7 @@ In all other cases, the `data` field must be `null`.
     card: "ThroneRoom";
     data: {
         card: Card; // the card to throne
-        data: <data>; // the data to play the throned card with
+        data: <data>; // the data to play the throned card with the first time
     }; 
 }
 {
@@ -211,6 +211,16 @@ Request:
 Response:
 {
     discard: Card[]; // the cards to discard from your hand
+}
+
+"ThroneRoom" // game to player request
+Request:
+{
+    card: Card; // the card you throned
+}
+Response:
+{
+    data: Card[]; // the data to play the card with the second time
 }
 
 "Library" // game to player request

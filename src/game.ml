@@ -328,6 +328,7 @@ type game_to_player_request =
       hand : Card.t list;
       empty_supply_piles : int;
     }
+  | ThroneRoom of { card : Card.t }
   | Library of {
       card : Card.t;
       hand : Card.t list;
@@ -378,6 +379,9 @@ module PlayerToGameResponse = struct
   end
   module Poacher = struct
     type t = { discard : Card.t list } [@@deriving of_yojson]
+  end
+  module ThroneRoom = struct
+    type t = { data : data } [@@deriving of_yojson]
   end
   module Library = struct
     type t = { skip : bool } [@@deriving of_yojson]
@@ -1196,6 +1200,13 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
       let current_player = CurrentPlayer.unplay_card card turn.current_player in
       let turn_status = TurnStatus.add_actions 1 current_player.turn_status in
       { turn with current_player = { current_player with turn_status } }
+    in
+    let%bind data =
+      let%lwt response = Player.request player (ThroneRoom { card }) in
+      let%bind PlayerToGameResponse.ThroneRoom.{ data } =
+        parse PlayerToGameResponse.ThroneRoom.t_of_yojson response
+      in
+      return data
     in
     let%bind turn = play_card ~turn ~card ~data in
     return turn
