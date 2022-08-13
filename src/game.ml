@@ -1485,7 +1485,52 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
       )
     in
     return { turn with current_player = { turn_status; player }; trash }
-  | Card.Witch | Card.Artisan -> failwith "unimplemented"
+  | Card.Witch ->
+    let { player; turn_status } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 2 player in
+    (* NOTE: sequential attacks instead of parallel
+     * because of curse depletion *)
+    let%lwt supply, next_players =
+      Lwt_list.fold_left_s
+        (fun (supply, next_players) player ->
+          match%lwt
+            let%lwt response =
+              Player.request player (Attack { card = Card.Witch; data = `Null })
+            in
+            match%bind
+              parse PlayerToGameResponse.Attack.t_of_yojson response
+            with
+            | PlayerToGameResponse.Attack.{ reaction = Some card; data = None }
+              ->
+              let%bind () = react ~player ~card in
+              return (supply, player)
+            | PlayerToGameResponse.Attack.{ reaction = None; data = None } -> (
+              match%lwt Supply.take Card.Curse supply with
+              | Ok supply ->
+                let player = Player.add_to_discard [Card.Curse] player in
+                return (supply, player)
+              | Error _ -> return (supply, player)
+            )
+            | PlayerToGameResponse.Attack.{ data = Some _; _ } ->
+              error "No data expected in Witch response"
+          with
+          | Ok (supply, player) -> Lwt.return (supply, next_players @ [player])
+          | Error err ->
+            Player.fatal_error err player;
+            Lwt.return (supply, next_players)
+        )
+        (turn.supply, [])
+        turn.next_players
+    in
+    return
+      {
+        turn with
+        current_player = { player; turn_status };
+        next_players;
+        supply;
+      }
+  | Card.Artisan -> failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
     play_response errorable =
