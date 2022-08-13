@@ -416,7 +416,7 @@ module PlayerToGameResponse = struct
 end
 
 type player_to_game_request =
-  | CleanUp of unit
+  | EndTurn of unit
   | Play of {
       card : Card.t;
       (* TODO: move data entirely to separate requests *)
@@ -1600,10 +1600,10 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
       failwith (Printf.sprintf "Player with name %s already exists." name)
     else
       (* TODO: don't allow multiple concurrent requests
-         e.g. issuing CleanUp while a Play is in progress can let a player
+         e.g. issuing EndTurn while a Play is in progress can let a player
          revert to a prior point in time later on in the game *)
       let handler = function
-        | CleanUp () ->
+        | EndTurn () ->
           clean_up ~game ~name
           |> Lwt.map (Result.map ~f:yojson_of_clean_up_response)
         | Play { card; data } ->

@@ -67,7 +67,7 @@ Once all players have responded to this request, the game will begin.
 
 When it is your turn, the game will send your player a `StartTurn` notification.
 Your turn lasts from the time you receive this notification until
-the time you end your turn with a `CleanUp` request.
+the time you end your turn with an `EndTurn` request.
 
 ### `StartTurn`
 ```
@@ -84,9 +84,9 @@ Request:
 }
 ```
 
-### `CleanUp`
+### `EndTurn`
 ```
-"CleanUp" // player to game request
+"EndTurn" // player to game request
 Request:
 {}
 Response:
