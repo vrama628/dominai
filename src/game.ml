@@ -1013,17 +1013,21 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     match Player.take_from_deck player with
     | None -> return { turn with current_player = { turn_status; player } }
     | Some (card, player) ->
-      let%lwt response = Player.request player (Vassal { card }) in
-      let%bind PlayerToGameResponse.Vassal.{ play; data } =
-        parse PlayerToGameResponse.Vassal.t_of_yojson response
-      in
-      if play then
-        (* temporarily place card into hand and add action
-           to make recursive call work *)
-        let player = Player.add_to_hand card player in
-        let turn_status = TurnStatus.add_actions 1 turn_status in
-        let turn = { turn with current_player = { player; turn_status } } in
-        play_card ~turn ~card ~data
+      if Card.is_action card then
+        let%lwt response = Player.request player (Vassal { card }) in
+        let%bind PlayerToGameResponse.Vassal.{ play; data } =
+          parse PlayerToGameResponse.Vassal.t_of_yojson response
+        in
+        if play then
+          (* temporarily place card into hand and add action
+             to make recursive call work *)
+          let player = Player.add_to_hand card player in
+          let turn_status = TurnStatus.add_actions 1 turn_status in
+          let turn = { turn with current_player = { player; turn_status } } in
+          play_card ~turn ~card ~data
+        else
+          let player = Player.add_to_discard [card] player in
+          return { turn with current_player = { turn_status; player } }
       else
         let player = Player.add_to_discard [card] player in
         return { turn with current_player = { turn_status; player } }
