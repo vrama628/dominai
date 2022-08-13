@@ -422,6 +422,7 @@ type player_to_game_request =
       (* TODO: move data entirely to separate requests *)
       data : data;
     }
+  | Buy of { card : Card.t }
 [@@deriving of_yojson]
 
 let method_and_params_of_json = function
@@ -702,11 +703,18 @@ module TurnStatus = struct
   let ensure_buy_phase (turn_status : t) : t = { turn_status with phase = Buy }
 
   (* TODO: roll into expend_treasure, and assert buy phase *)
-  let expend_buy turn_status : t errorable =
-    if turn_status.buys > 0 then
-      return { turn_status with buys = turn_status.buys - 1 }
-    else
-      error "No buys left."
+  let expend_buy ~(cost : int) turn_status : t errorable =
+    let turn_status = ensure_buy_phase turn_status in
+    match turn_status.buys > 0, turn_status.treasure >= cost with
+    | true, true ->
+      return
+        {
+          turn_status with
+          buys = turn_status.buys - 1;
+          treasure = turn_status.treasure - cost;
+        }
+    | false, _ -> error "No buys left."
+    | _, false -> error "Not enough treasure."
 
   let expend_action turn_status : t errorable =
     match turn_status.phase with
@@ -716,12 +724,6 @@ module TurnStatus = struct
       else
         error "No actions left."
     | Buy -> error "Can't perform action in buy phase."
-
-  (*let expend_treasure (n : int) turn_status : t errorable =
-    if turn_status.treasure >= n then
-      return { turn_status with treasure = turn_status.actions - n }
-    else
-      error "No treasure left."*)
 
   let into_play (card : Card.t) (turn_status : t) : t =
     { turn_status with in_play = card :: turn_status.in_play }
@@ -1533,8 +1535,16 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
   | Card.Artisan ->
     let { turn_status; player } = current_player in
     let%bind turn_status = TurnStatus.expend_action turn_status in
-    let%bind Play.Artisan.{ gain; topdeck } = parse Play.Artisan.t_of_yojson data in
-    let%bind () = ensure (Card.cost gain <= 5) "%s costs %d." (Card.to_string gain) (Card.cost gain) in
+    let%bind Play.Artisan.{ gain; topdeck } =
+      parse Play.Artisan.t_of_yojson data
+    in
+    let%bind () =
+      ensure
+        (Card.cost gain <= 5)
+        "%s costs %d."
+        (Card.to_string gain)
+        (Card.cost gain)
+    in
     let%bind supply = Supply.take gain turn.supply in
     let player = Player.add_to_hand gain player in
     let%bind player = Player.remove_from_hand [topdeck] player in
@@ -1555,6 +1565,27 @@ let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
       )
   | _ -> error "It is not your turn."
 
+(* TODO: don't allow playing treasures after buying *)
+let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info errorable =
+  match React.S.value game.state with
+  | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
+    let%bind supply = Supply.take card turn.supply in
+    let%bind turn_status =
+      TurnStatus.expend_buy
+        ~cost:(Card.cost card)
+        turn.current_player.turn_status
+    in
+    let player = Player.add_to_discard [card] turn.current_player.player in
+    let turn = { turn with current_player = { turn_status; player }; supply } in
+    game.set (Turn turn);
+    return
+      (CurrentPlayer.turn_info
+         turn.current_player
+         ~supply:turn.supply
+         ~trash:turn.trash
+      )
+  | _ -> error "It is not your turn."
+
 let create () : t =
   let state, set = React.S.create ~eq:phys_equal (PreStart { players = [] }) in
   { state; set }
@@ -1568,6 +1599,9 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     then
       failwith (Printf.sprintf "Player with name %s already exists." name)
     else
+      (* TODO: don't allow multiple concurrent requests
+         e.g. issuing CleanUp while a Play is in progress can let a player
+         revert to a prior point in time later on in the game *)
       let handler = function
         | CleanUp () ->
           clean_up ~game ~name
@@ -1575,6 +1609,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         | Play { card; data } ->
           play ~game ~card ~data ~name
           |> Lwt.map (Result.map ~f:yojson_of_play_response)
+        | Buy { card } ->
+          buy ~game ~card ~name |> Lwt.map (Result.map ~f:yojson_of_turn_info)
       in
       let promise, player = Player.create ~name ~websocket ~handler in
       let players = player :: players in
