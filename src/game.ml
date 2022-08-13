@@ -1057,7 +1057,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let%bind supply = Supply.take Card.Silver turn.supply in
     let player = Player.topdeck Card.Silver player in
     let%lwt next_players =
-      List.map turn.next_players ~f:(fun player ->
+      Lwt_list.filter_map_p
+        (fun player ->
           match%lwt
             let%lwt response =
               Player.request
@@ -1097,9 +1098,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
           | Error err ->
             Player.fatal_error err player;
             Lwt.return None
-      )
-      |> Lwt.all
-      |> Lwt.map List.filter_opt
+        )
+        turn.next_players
     in
     return
       {
@@ -1112,7 +1112,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let { player; turn_status } = current_player in
     let%bind turn_status = TurnStatus.expend_action turn_status in
     let%lwt next_players =
-      List.map turn.next_players ~f:(fun player ->
+      Lwt_list.filter_map_p
+        (fun player ->
           match%lwt
             let%lwt response =
               Player.request
@@ -1147,9 +1148,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
           | Error err ->
             Player.fatal_error err player;
             Lwt.return None
-      )
-      |> Lwt.all
-      |> Lwt.map List.filter_opt
+        )
+        turn.next_players
     in
     return { turn with current_player = { player; turn_status }; next_players }
   | Card.Moneylender ->
@@ -1254,7 +1254,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
       add_to_trashed, trash_trashed
     in
     let%lwt next_players =
-      List.map turn.next_players ~f:(fun player ->
+      Lwt_list.filter_map_p
+        (fun player ->
           match%lwt
             let revealed1, player =
               let take_result = Player.take_from_deck player in
@@ -1327,9 +1328,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
           | Error err ->
             Player.fatal_error err player;
             Lwt.return None
-      )
-      |> Lwt.all
-      |> Lwt.map List.filter_opt
+        )
+        turn.next_players
     in
     let trash = trash_trashed turn.trash in
     return
@@ -1530,7 +1530,16 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
         next_players;
         supply;
       }
-  | Card.Artisan -> failwith "unimplemented"
+  | Card.Artisan ->
+    let { turn_status; player } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let%bind Play.Artisan.{ gain; topdeck } = parse Play.Artisan.t_of_yojson data in
+    let%bind () = ensure (Card.cost gain <= 5) "%s costs %d." (Card.to_string gain) (Card.cost gain) in
+    let%bind supply = Supply.take gain turn.supply in
+    let player = Player.add_to_hand gain player in
+    let%bind player = Player.remove_from_hand [topdeck] player in
+    let player = Player.topdeck topdeck player in
+    return { turn with current_player = { turn_status; player }; supply }
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
     play_response errorable =
