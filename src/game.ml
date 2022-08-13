@@ -284,6 +284,10 @@ module Supply = struct
     | _ -> error "No supply of %s remaining." (Card.to_string card)
 
   let empty_piles : t -> int = Map.count ~f:(( = ) 0)
+
+  (** assumes 2-4 players *)
+  let game_is_over (supply : t) : bool =
+    empty_piles supply >= 3 || Map.find_exn supply Card.Province <= 0
 end
 
 type turn_phase =
@@ -307,9 +311,29 @@ type turn_info = {
 }
 [@@deriving yojson_of]
 
+type game_over_result =
+  | Win
+  | Lose
+[@@deriving yojson_of]
+
+let yojson_of_game_over_result (game_over_result : game_over_result) :
+    Yojson.Safe.t =
+  match yojson_of_game_over_result game_over_result with
+  | `List [name] -> name
+  | _ -> failwith "unreachable"
+
+type scores = (string * int) list
+
+let yojson_of_scores (scores : scores) : Yojson.Safe.t =
+  `Assoc (List.Assoc.map ~f:(fun score -> `Int score) scores)
+
 type game_to_player_notification =
   | StartTurn of turn_info
   | FatalError of { message : string }
+  | GameOver of {
+      result : game_over_result;
+      scores : scores;
+    }
 [@@deriving yojson_of]
 
 (* TODO: move into module *)
@@ -532,6 +556,8 @@ module Player = struct
 
     let topdeck (card : Card.t) (cards : t) =
       { cards with deck = card :: cards.deck }
+
+    let all_cards { deck; hand; discard } : Card.t list = deck @ hand @ discard
   end
 
   type t = {
@@ -665,11 +691,27 @@ module Player = struct
         |> Dream.send websocket
     )
 
+  let disconnect (player : t) : unit = Lwt.wakeup player.resolver ()
+
   (** notifies and disconnects the player *)
   let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
     let Jsonrpc.Response.Error.{ message; _ } = error in
     notify player (FatalError { message });
-    Lwt.wakeup player.resolver ()
+    disconnect player
+
+  let victory_points { cards; _ } : int =
+    let all_cards = Cards.all_cards cards in
+    let gardens_worth = List.length all_cards / 10 in
+    let n_province = List.count all_cards ~f:Card.(equal Province) in
+    let n_duchy = List.count all_cards ~f:Card.(equal Duchy) in
+    let n_estate = List.count all_cards ~f:Card.(equal Estate) in
+    let n_gardens = List.count all_cards ~f:Card.(equal Gardens) in
+    let n_curse = List.count all_cards ~f:Card.(equal Curse) in
+    (n_province * 6)
+    + (n_duchy * 3)
+    + n_estate
+    + (n_gardens * gardens_worth)
+    - n_curse
 end
 
 module TurnStatus = struct
@@ -856,7 +898,30 @@ let start_turn
     (StartTurn (CurrentPlayer.turn_info current_player ~supply ~trash));
   Lwt.return_unit
 
-type clean_up_response = {
+let game_over ~(players : Player.t list) : unit =
+  let scores =
+    List.map players ~f:(fun player ->
+        Player.name player, Player.victory_points player
+    )
+  in
+  let highest_score =
+    scores
+    |> List.map ~f:snd
+    |> List.max_elt ~compare:Int.compare
+    |> Option.value_exn
+  in
+  List.iter players ~f:(fun player ->
+      let result =
+        if Player.victory_points player = highest_score then
+          Win
+        else
+          Lose
+      in
+      Player.notify player (GameOver { scores; result });
+      Player.disconnect player
+  )
+
+type end_turn_response = {
   hand : Card.t list;
   discard : int;
   deck : int;
@@ -864,7 +929,7 @@ type clean_up_response = {
 }
 [@@deriving yojson_of]
 
-let clean_up ~(game : t) ~(name : string) : clean_up_response errorable =
+let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
   match React.S.value game.state with
   | Turn
       {
@@ -877,23 +942,26 @@ let clean_up ~(game : t) ~(name : string) : clean_up_response errorable =
       }
     when String.equal (CurrentPlayer.name current_player) name ->
     let prev_player = CurrentPlayer.clean_up current_player in
-    let clean_up_response =
+    let end_turn_response =
       let hand = Player.get_hand prev_player in
       let discard = Player.get_discard prev_player in
       let deck = Player.get_deck prev_player in
       { hand; discard; deck; supply }
     in
     let next_players = next_players @ [prev_player] in
-    Lwt.async (fun () ->
-        start_turn
-          ~game
-          ~kingdom
-          ~supply
-          ~trash
-          ~player:next_player
-          ~next_players
-    );
-    Lwt.return (Ok clean_up_response)
+    if Supply.game_is_over supply then
+      game_over ~players:(next_player :: next_players)
+    else
+      Lwt.async (fun () ->
+          start_turn
+            ~game
+            ~kingdom
+            ~supply
+            ~trash
+            ~player:next_player
+            ~next_players
+      );
+    Lwt.return (Ok end_turn_response)
   | _ -> error "It is not your turn."
 
 (* PRECONDITION: between 2 and 4 players *)
@@ -1604,8 +1672,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
          revert to a prior point in time later on in the game *)
       let handler = function
         | EndTurn () ->
-          clean_up ~game ~name
-          |> Lwt.map (Result.map ~f:yojson_of_clean_up_response)
+          end_turn ~game ~name
+          |> Lwt.map (Result.map ~f:yojson_of_end_turn_response)
         | Play { card; data } ->
           play ~game ~card ~data ~name
           |> Lwt.map (Result.map ~f:yojson_of_play_response)

@@ -372,7 +372,7 @@ Once the game is over, the game will send you a `GameOver` notification.
 "GameOver" // game to player notification
 Notification:
 {
-    result: "win" | "lose" | "draw";
+    result: "Win" | "Lose";
     scores: { [string]: number };
 }
 ```
