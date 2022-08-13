@@ -333,6 +333,10 @@ type game_to_player_request =
       card : Card.t;
       hand : Card.t list;
     }
+  | Sentry of {
+      hand : Card.t list;
+      cards : Card.t list;
+    }
 [@@deriving yojson_of]
 
 module GameToPlayerRequest = struct
@@ -385,6 +389,29 @@ module PlayerToGameResponse = struct
   end
   module Library = struct
     type t = { skip : bool } [@@deriving of_yojson]
+  end
+  module Sentry = struct
+    type placement =
+      | Trash
+      | Discard
+      | Topdeck
+    let placement_of_yojson = function
+      | `String "trash" -> Trash
+      | `String "discard" -> Discard
+      | `String "topdeck" -> Topdeck
+      | json ->
+        let e =
+          Failure "`do` must be one of \"trash\", \"discard\", or \"topdeck\"."
+        in
+        raise (Ppx_yojson_conv_lib.Yojson_conv.Of_yojson_error (e, json))
+
+    type card_placement = {
+      card : Card.t;
+      placement : placement;
+    }
+    [@@deriving of_yojson]
+
+    type t = card_placement list [@@deriving of_yojson]
   end
 end
 
@@ -1400,7 +1427,61 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let%bind supply = Supply.take to_gain turn.supply in
     let player = Player.add_to_hand to_gain player in
     return { turn with current_player = { player; turn_status }; trash; supply }
-  | Card.Sentry | Card.Witch | Card.Artisan -> failwith "unimplemented"
+  | Card.Sentry ->
+    let { turn_status; player } = current_player in
+    let%bind turn_status = TurnStatus.expend_action turn_status in
+    let player = Player.draw_n 1 player in
+    let turn_status = TurnStatus.add_actions 1 turn_status in
+    let revealed1, player =
+      let take_result = Player.take_from_deck player in
+      ( Option.map take_result ~f:fst,
+        Option.value_map take_result ~default:player ~f:snd )
+    in
+    let revealed2, player =
+      let take_result = Player.take_from_deck player in
+      ( Option.map take_result ~f:fst,
+        Option.value_map take_result ~default:player ~f:snd )
+    in
+    let revealed = List.filter_opt [revealed1; revealed2] in
+    let%lwt response =
+      Player.request
+        player
+        (Sentry { hand = Player.get_hand player; cards = revealed })
+    in
+    let%bind card_placements =
+      parse PlayerToGameResponse.Sentry.t_of_yojson response
+    in
+    let cards_placed =
+      List.map
+        card_placements
+        ~f:(fun PlayerToGameResponse.Sentry.{ card; placement = _ } -> card
+      )
+    in
+    let%bind () =
+      ensure
+        (is_submultiset cards_placed revealed |> Option.is_some
+        && is_submultiset revealed cards_placed |> Option.is_some
+        )
+        "Cards placed %s do not match cards revealed %s"
+        ([%yojson_of: Card.t list] cards_placed |> Yojson.Safe.to_string)
+        ([%yojson_of: Card.t list] revealed |> Yojson.Safe.to_string)
+    in
+    let player, trash =
+      List.fold
+        card_placements
+        ~init:(player, turn.trash)
+        ~f:(fun (player, trash) PlayerToGameResponse.Sentry.{ card; placement }
+           ->
+          match placement with
+          | PlayerToGameResponse.Sentry.Trash -> player, card :: trash
+          | PlayerToGameResponse.Sentry.Discard ->
+            Player.add_to_discard [card] player, trash
+          | PlayerToGameResponse.Sentry.Topdeck ->
+            Player.topdeck card player, trash
+      )
+    in
+    return { turn with current_player = { turn_status; player }; trash }
+  | Card.Witch | Card.Artisan -> failwith "unimplemented"
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
     play_response errorable =

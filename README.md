@@ -237,12 +237,13 @@ Response:
 "Sentry" // game to player request
 Request:
 {
-    cards: [Card, Card]; // the top 2 cards of your deck
+    hand: Card[]; // your current hand
+    cards: Card[]; // the top 2 cards of your deck
 }
 Response:
 {
     card: Card; // which of the revealed cards this pertains to
-    do: "trash" | "discard" | "topdeck"; // what to do to this card
+    placement: "trash" | "discard" | "topdeck"; // what to do to this card
 }[] // NOTE: the response is a two-element array.
     // The actions in the array are performed in order, so if you wish
     // to topdeck both cards in a particular order,
