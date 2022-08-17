@@ -14,5 +14,7 @@
     ppx_sexp_conv
     stdio
     ppx_deriving
+    tyxml
+    omd
   )
 )
