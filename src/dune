@@ -9,6 +9,7 @@
     react
     tyxml
     omd
+    base64
   )
   (preprocess (pps
     lwt_ppx

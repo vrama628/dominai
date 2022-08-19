@@ -37,9 +37,23 @@ let tyxml (html : doc) : Dream.response Lwt.t =
   Format.asprintf "%a" (pp ()) html |> Dream.html
 
 let markdown (md : string) : [> Html_types.txt ] elt =
-  md |> Omd.of_string |> Omd.to_html |> entity
+  md |> Omd.of_string |> Omd.to_html |> Unsafe.data
 
 let index (_ : Dream.request) : Dream.response Lwt.t =
+  let start_game =
+    form
+      ~a:
+        [
+          a_class ["d-grid"; "col-md-6"; "mx-auto"];
+          a_method `Post;
+          a_action "/game";
+        ]
+      [
+        button
+          ~a:[a_button_type `Submit; a_class ["btn"; "btn-primary"]]
+          [txt "Start Game"];
+      ]
+  in
   tyxml
   @@ template
        ~title:"DominAI"
@@ -52,15 +66,56 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
                  ~a:[a_class ["row"; "justify-content-center"]]
                  [
                    div
-                     ~a:[a_class ["col-md-4"]]
-                     [h1 [txt "DominAI"]; markdown Static.docs_md];
+                     ~a:[a_class ["col-md-8"]]
+                     [h1 [txt "DominAI"]; start_game; markdown Static.docs_md];
                  ];
              ];
          ]
 
-let create_game : Dream.handler = fun _ -> failwith "TODO"
+let () = Random.self_init ()
+let generate_game_key () : string =
+  String.init 20 ~f:(fun _ -> Random.char ())
+  |> Base64.encode_exn ~alphabet:Base64.uri_safe_alphabet
 
-let game_info : Dream.handler = fun _ -> failwith "TODO"
+let create_game (request : Dream.request) : Dream.response Lwt.t =
+  let game = Game.create () in
+  let key = generate_game_key () in
+  Hashtbl.add_exn games ~key ~data:game;
+  Dream.redirect request (Printf.sprintf "/game/%s" key)
+
+let game_info (request : Dream.request) : Dream.response Lwt.t =
+  let copy_game_uri =
+    let host_uri = Dream.header request "Host" |> Option.value_exn in
+    let game_key = Dream.param request "game" in
+    let game_uri = Printf.sprintf "http://%s/%s" host_uri game_key in
+    div
+      [
+        txt
+          "To connect your code to this DominAI game, send a POST request to \
+           the below URL. Make sure to set the \"name\" field of the request \
+           to your player's name.";
+        div
+          ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
+          [txt game_uri];
+      ]
+  in
+  tyxml
+  @@ template
+       ~title:"DominAI"
+       ~body:
+         [
+           div
+             ~a:[a_class ["container"]]
+             [
+               div
+                 ~a:[a_class ["row"; "justify-content-center"]]
+                 [
+                   div
+                     ~a:[a_class ["col-md-8"]]
+                     [h1 [txt "DominAI Game"]; copy_game_uri];
+                 ];
+             ];
+         ]
 
 let join_game (request : Dream.request) : Dream.response Lwt.t =
   let game_name_opt =

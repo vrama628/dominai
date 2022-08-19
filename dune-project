@@ -16,5 +16,6 @@
     ppx_deriving
     tyxml
     omd
+    base64
   )
 )

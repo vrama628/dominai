@@ -15,6 +15,7 @@ depends: [
   "ppx_deriving"
   "tyxml"
   "omd"
+  "base64"
   "odoc" {with-doc}
 ]
 build: [
