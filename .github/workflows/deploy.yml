@@ -17,13 +17,15 @@ jobs:
       run: sudo apt-get install -y libev-dev opam
     
     - name: Opam init
-      run: opam init --auto-setup --enable-shell-hook
+      run: opam init
 
     - name: Install opam dependencies
       run: opam install --yes . --deps-only 
 
     - name: Build server
-      run: dune build src/main.exe
+      run: |
+        eval $(opam env)
+        dune build src/main.exe
 
     - name: Move server binary out of artifacts directory
       run: mv _build/default/src/main.exe dominai
