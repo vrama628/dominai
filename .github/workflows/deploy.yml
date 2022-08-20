@@ -38,6 +38,8 @@ jobs:
     needs: build
     steps:
       - name: Start SSH agent and add private key
+        env:
+          EC2_PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}
         run: |
           eval $(ssh-agent -s)
           ssh-add <<< $EC2_PRIVATE_KEY
