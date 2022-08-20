@@ -17,7 +17,10 @@ jobs:
       run: sudo apt-get install -y libev-dev opam
     
     - name: Opam init
-      run: opam init
+      run: opam init --bare
+
+    - name: Install Ocaml 4.14.0
+      run: opam switch create 4.14.0
 
     - name: Install opam dependencies
       run: opam install --yes . --deps-only 
