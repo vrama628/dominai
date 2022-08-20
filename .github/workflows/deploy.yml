@@ -41,4 +41,4 @@ jobs:
         host: 3.225.230.184
         key: ${{ secrets.EC2_PRIVATE_KEY }}
         source: dominai
-        target: dominai
+        target: /home/ubuntu
