@@ -20,7 +20,7 @@ jobs:
       run: opam init
 
     - name: Install opam dependencies
-      run: opam install . --deps-only
+      run: opam install -y . --deps-only
 
     - name: Build server
       run: dune build src/main.exe
