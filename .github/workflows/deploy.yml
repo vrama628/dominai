@@ -1,0 +1,29 @@
+name: Deploy to dominai.io
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Check out
+      uses: actions/checkout@v3
+    
+    - name: Install opam
+      run: bash -c "sh <(curl -fsSL https://raw.githubusercontent.com/ocaml/opam/master/shell/install.sh)"
+    
+    - name: Opam init
+      run: opam init
+
+    - name: Install opam dependencies
+      run: opam install . --deps-only
+
+    - name: Build server
+      run: dune build src/main.exe
+
+    - name: Move server binary out of artifacts directory
+      run: mv _build/default/src/main.exe dominai
