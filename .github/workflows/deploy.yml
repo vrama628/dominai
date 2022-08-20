@@ -32,3 +32,13 @@ jobs:
 
     - name: Move server binary out of artifacts directory
       run: mv _build/default/src/main.exe dominai
+  
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Add private key
+        run: ssh-add <<< $EC2_PRIVATE_KEY
+
+      - name: Copy server to EC2
+        run: scp dominai ubuntu@3.225.230.184
