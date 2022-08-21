@@ -30,7 +30,7 @@ jobs:
         eval $(opam env)
         dune build src/main.exe
   
-  build:
+  deploy:
     runs-on: ubuntu-latest
     needs: build
     steps:
