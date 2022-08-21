@@ -43,3 +43,4 @@ jobs:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}
           REMOTE_HOST: 3.225.230.184
           REMOTE_USER: ubuntu
+          TARGET: /home/ubuntu
