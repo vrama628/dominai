@@ -1,7 +1,7 @@
 .PHONY: serve install
 
 serve: install
-	dune exec dominai
+	opam exec dune exec dominai
 
 install:
 	opam install -y . --deps-only
