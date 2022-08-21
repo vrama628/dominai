@@ -137,4 +137,4 @@ let router : Dream.handler =
       Dream.post "/join/:game" join_game;
     ]
 
-let () = Dream.run ~interface:"0.0.0.0" ~port:80 @@ Dream.logger @@ router
+let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router
