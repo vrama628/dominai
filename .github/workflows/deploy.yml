@@ -1,5 +1,9 @@
 name: Deploy to dominai.io
 
+concurrency: 
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
   push:
