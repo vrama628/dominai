@@ -1,9 +1,11 @@
 open Core
 
-let main (name : string) : unit Lwt.t =
-  let uri : Uri.t =
-    Uri.add_query_param' (Uri.of_string "http://localhost:8080") ("name", name)
-  in
+let fresh_name () = Printf.sprintf "example_%d" (Random.int Int.max_value)
+
+let main (url : string) : unit Lwt.t =
+  let name = fresh_name () in
+  Printf.printf "Joining as %s ..." name;
+  let uri : Uri.t = Uri.add_query_param (Uri.of_string url) ("name", [name]) in
   let%lwt (endp : Conduit.endp) =
     Resolver_lwt.resolve_uri ~uri Resolver_lwt_unix.system
   in
@@ -21,8 +23,8 @@ let main (name : string) : unit Lwt.t =
 let params : (unit -> unit) Command.Param.t =
   let open Command.Param in
   let open Command.Let_syntax in
-  let%map name = "name" %: string |> anon in
-  fun () -> Lwt_main.run (main name)
+  let%map url = "url" %: string |> anon in
+  fun () -> Lwt_main.run (main url)
 
 let () =
   Command.basic

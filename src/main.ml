@@ -87,13 +87,13 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
   let copy_game_uri =
     let host_uri = Dream.header request "Host" |> Option.value_exn in
     let game_key = Dream.param request "game" in
-    let game_uri = Printf.sprintf "http://%s/%s" host_uri game_key in
+    let game_uri = Printf.sprintf "http://%s/join/%s" host_uri game_key in
     div
       [
         txt
-          "To connect your code to this DominAI game, send a POST request to \
-           the below URL. Make sure to set the \"name\" field of the request \
-           to your player's name.";
+          "To connect your code to this DominAI game, send a GET request to \
+           the below URL. Make sure to add a query parameter called \"name\" \
+           set to the name of your player.";
         div
           ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
           [txt game_uri];
@@ -124,6 +124,7 @@ let join_game (request : Dream.request) : Dream.response Lwt.t =
     let%bind name = Dream.query request "name" in
     return (game, name)
   in
+  Dream.log "join_game %b" (Option.is_some game_name_opt);
   match game_name_opt with
   | None -> Dream.json ~status:`Bad_Request "null"
   | Some (game, name) -> Dream.websocket (Game.add_player game name)
@@ -134,7 +135,7 @@ let router : Dream.handler =
       Dream.get "/" index;
       Dream.post "/game" create_game;
       Dream.get "/game/:game" game_info;
-      Dream.post "/join/:game" join_game;
+      Dream.get "/join/:game" join_game;
     ]
 
 let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router
