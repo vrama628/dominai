@@ -1,7 +1,6 @@
-(executable
- (public_name dominai)
- (name main)
- (libraries dominai core dream jsonrpc yojson react tyxml omd base64)
+(library
+ (name dominai)
+ (libraries)
  (preprocess
   (pps
    lwt_ppx

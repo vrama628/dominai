@@ -31,7 +31,7 @@ let template
            ();
        ]
     )
-    (body page_body)
+    (body (h1 [a ~a:[a_href "/"] [txt "DominAI"]] :: page_body))
 
 let tyxml (html : doc) : Dream.response Lwt.t =
   Format.asprintf "%a" (pp ()) html |> Dream.html
@@ -67,7 +67,7 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
                  [
                    div
                      ~a:[a_class ["col-md-8"]]
-                     [h1 [txt "DominAI"]; start_game; markdown Static.docs_md];
+                     [start_game; markdown Static.docs_md];
                  ];
              ];
          ]

@@ -1,5 +1,11 @@
 (executable
  (name main)
- (libraries core core_unix.command_unix jsonrpc yojson websocket-lwt-unix)
+ (libraries
+  dominai
+  core
+  core_unix.command_unix
+  jsonrpc
+  yojson
+  websocket-lwt-unix)
  (preprocess
   (pps lwt_ppx ppx_yojson_conv ppx_let)))
