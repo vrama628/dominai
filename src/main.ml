@@ -5,7 +5,20 @@ let games : (string, Game.t) Hashtbl.t = Hashtbl.create (module String)
 
 let template
     ~title:(page_title : string)
-    ~body:(page_body : [< Html_types.flow5 ] elt list) =
+    ~(content : [< Html_types.flow5 ] elt list) =
+  let navbar =
+    div
+      ~a:[a_class ["d-flex"; "justify-content-center"]]
+      [
+        h1
+          ~a:[a_class ["display-1"]]
+          [
+            a
+              ~a:[a_href "/"; a_class ["text-reset"; "text-decoration-none"]]
+              [txt "DominAI"];
+          ];
+      ]
+  in
   html
     ~a:[a_lang "en"]
     (head
@@ -31,7 +44,17 @@ let template
            ();
        ]
     )
-    (body (h1 [a ~a:[a_href "/"] [txt "DominAI"]] :: page_body))
+    (body
+       [
+         div
+           ~a:[a_class ["container"]]
+           [
+             div
+               ~a:[a_class ["row"; "justify-content-center"]]
+               [div ~a:[a_class ["col-md-8"]] (navbar :: content)];
+           ];
+       ]
+    )
 
 let tyxml (html : doc) : Dream.response Lwt.t =
   Format.asprintf "%a" (pp ()) html |> Dream.html
@@ -50,27 +73,16 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
         ]
       [
         button
-          ~a:[a_button_type `Submit; a_class ["btn"; "btn-primary"]]
+          ~a:
+            [
+              a_button_type `Submit;
+              a_class ["btn"; "btn-primary"; "btn-lg"; "m-2"];
+            ]
           [txt "Start Game"];
       ]
   in
   tyxml
-  @@ template
-       ~title:"DominAI"
-       ~body:
-         [
-           div
-             ~a:[a_class ["container"]]
-             [
-               div
-                 ~a:[a_class ["row"; "justify-content-center"]]
-                 [
-                   div
-                     ~a:[a_class ["col-md-8"]]
-                     [start_game; markdown Static.docs_md];
-                 ];
-             ];
-         ]
+  @@ template ~title:"DominAI" ~content:[start_game; markdown Static.docs_md]
 
 let () = Random.self_init ()
 let generate_game_key () : string =
@@ -100,22 +112,7 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
       ]
   in
   tyxml
-  @@ template
-       ~title:"DominAI"
-       ~body:
-         [
-           div
-             ~a:[a_class ["container"]]
-             [
-               div
-                 ~a:[a_class ["row"; "justify-content-center"]]
-                 [
-                   div
-                     ~a:[a_class ["col-md-8"]]
-                     [h1 [txt "DominAI Game"]; copy_game_uri];
-                 ];
-             ];
-         ]
+  @@ template ~title:"DominAI" ~content:[h1 [txt "DominAI Game"]; copy_game_uri]
 
 let join_game (request : Dream.request) : Dream.response Lwt.t =
   let game_name_opt =
