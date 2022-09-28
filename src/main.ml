@@ -99,15 +99,16 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
   @@ template ~title:"DominAI" ~content:[start_game; markdown Static.docs_md]
 
 let () = Random.self_init ()
+
 let generate_game_key () : string =
   String.init 20 ~f:(fun _ -> Random.char ())
   |> Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet
+
 let generate_username () : string =
   Printf.sprintf
-    "user%s"
-    (String.init 5 ~f:(fun _ -> Random.char ())
-    |> Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet
-    )
+    "%s_%s"
+    (List.random_element_exn Static.adjectives)
+    (List.random_element_exn Static.nouns)
 
 let game_info (request : Dream.request) : Dream.response Lwt.t =
   let copy_game_uri =
