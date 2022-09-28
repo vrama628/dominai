@@ -126,8 +126,7 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
       [
         txt
           "To connect your code to this DominAI game, send a GET request to \
-           the below URL. Make sure to add a query parameter called \"name\" \
-           set to the name of your player.";
+           the below URL.";
         div
           ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
           [txt join_uri];
