@@ -1,16 +1,10 @@
 open Core
 
-let fresh_name () = Printf.sprintf "example_%d" (Random.int Int.max_value)
-
 module Conn = struct
   type t = Websocket_lwt_unix.conn
 
   let connect ~(url : string) : t Lwt.t =
-    let name = fresh_name () in
-    Printf.printf "Joining as %s ..." name;
-    let uri : Uri.t =
-      Uri.add_query_param (Uri.of_string url) ("name", [name])
-    in
+    let uri : Uri.t = Uri.of_string url in
     let%lwt (endp : Conduit.endp) =
       Resolver_lwt.resolve_uri ~uri Resolver_lwt_unix.system
     in

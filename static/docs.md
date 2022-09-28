@@ -10,9 +10,6 @@ I'm happy to help you get started.
 The rest of this document will describe the format of how your code
 and the game server will communicate to each other.
 
-When you run the game server it'll by default serve at `http://localhost:8080`.
-Your code will connect a WebSocket at this address.
-
 [The source code is available on GitHub](https://github.com/vrama628/dominai).
 Feel free to submit issues or pull requests to that repository.
 

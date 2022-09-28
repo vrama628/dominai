@@ -72,6 +72,20 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
           a_action "/game";
         ]
       [
+        div
+          ~a:[a_class ["form-group"]]
+          [
+            label ~a:[a_label_for "name"] [txt "Username:"];
+            input
+              ~a:
+                [
+                  a_input_type `Text;
+                  a_class ["form-control"];
+                  a_id "name";
+                  a_name "name";
+                ]
+              ();
+          ];
         button
           ~a:
             [
@@ -87,19 +101,26 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
 let () = Random.self_init ()
 let generate_game_key () : string =
   String.init 20 ~f:(fun _ -> Random.char ())
-  |> Base64.encode_exn ~alphabet:Base64.uri_safe_alphabet
-
-let create_game (request : Dream.request) : Dream.response Lwt.t =
-  let game = Game.create () in
-  let key = generate_game_key () in
-  Hashtbl.add_exn games ~key ~data:game;
-  Dream.redirect request (Printf.sprintf "/game/%s" key)
+  |> Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet
+let generate_username () : string =
+  Printf.sprintf
+    "user%s"
+    (String.init 5 ~f:(fun _ -> Random.char ())
+    |> Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet
+    )
 
 let game_info (request : Dream.request) : Dream.response Lwt.t =
   let copy_game_uri =
     let host_uri = Dream.header request "Host" |> Option.value_exn in
     let game_key = Dream.param request "game" in
-    let game_uri = Printf.sprintf "http://%s/join/%s" host_uri game_key in
+    let username =
+      match Dream.flash_messages request with
+      | [("name", username)] -> username
+      | _ -> generate_username ()
+    in
+    let join_uri =
+      Printf.sprintf "http://%s/join/%s?name=%s" host_uri game_key username
+    in
     div
       [
         txt
@@ -108,11 +129,28 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
            set to the name of your player.";
         div
           ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
-          [txt game_uri];
+          [txt join_uri];
+        txt
+          "To invite a friend to this game, send them the URL that's in your \
+           address bar.";
       ]
   in
   tyxml
   @@ template ~title:"DominAI" ~content:[h1 [txt "DominAI Game"]; copy_game_uri]
+
+let create_game (request : Dream.request) : Dream.response Lwt.t =
+  let game = Game.create () in
+  let key = generate_game_key () in
+  Hashtbl.add_exn games ~key ~data:game;
+  let%lwt () =
+    match%lwt Dream.form ~csrf:false request with
+    | `Ok [("name", username)] ->
+      if String.length username > 0 then
+        Dream.add_flash_message request "name" username;
+      Lwt.return_unit
+    | _ -> Lwt.return_unit
+  in
+  Dream.redirect request (Printf.sprintf "/game/%s" key)
 
 let join_game (request : Dream.request) : Dream.response Lwt.t =
   let game_name_opt =
@@ -135,4 +173,4 @@ let router : Dream.handler =
       Dream.get "/join/:game" join_game;
     ]
 
-let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router
+let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ Dream.flash @@ router
