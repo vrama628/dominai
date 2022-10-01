@@ -132,10 +132,18 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
         txt
           "To invite a friend to this game, send them the URL that's in your \
            address bar.";
+        div ~a:[a_class ["bg-light"; "rounded"]; a_id "app"] [];
       ]
   in
   tyxml
-  @@ template ~title:"DominAI" ~content:[h1 [txt "DominAI Game"]; copy_game_uri]
+  @@ template
+       ~title:"DominAI"
+       ~content:
+         [
+           h1 [txt "DominAI Game"];
+           copy_game_uri;
+           script (cdata_script Static.Js.game_info);
+         ]
 
 let create_game (request : Dream.request) : Dream.response Lwt.t =
   let game = Game.create () in

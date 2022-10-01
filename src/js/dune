@@ -1,0 +1,10 @@
+(executable
+ (name game_info)
+ (libraries js_of_ocaml js_of_ocaml-tyxml js_of_ocaml-lwt)
+ (modes js)
+ (preprocess
+  (pps js_of_ocaml-ppx lwt_ppx)))
+
+(alias
+ (name app)
+ (deps game_info.bc.js))
