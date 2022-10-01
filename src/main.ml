@@ -114,13 +114,12 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
   let copy_game_uri =
     let host_uri = Dream.header request "Host" |> Option.value_exn in
     let game_key = Dream.param request "game" in
-    let username =
-      match Dream.flash_messages request with
-      | [("name", username)] -> username
-      | _ -> generate_username ()
-    in
     let join_uri =
-      Printf.sprintf "http://%s/join/%s?name=%s" host_uri game_key username
+      Printf.sprintf
+        "http://%s/join/%s?name=%s"
+        host_uri
+        game_key
+        (generate_username ())
     in
     div
       [
@@ -142,27 +141,23 @@ let create_game (request : Dream.request) : Dream.response Lwt.t =
   let game = Game.create () in
   let key = generate_game_key () in
   Hashtbl.add_exn games ~key ~data:game;
-  let%lwt () =
-    match%lwt Dream.form ~csrf:false request with
-    | `Ok [("name", username)] ->
-      if String.length username > 0 then
-        Dream.add_flash_message request "name" username;
-      Lwt.return_unit
-    | _ -> Lwt.return_unit
-  in
   Dream.redirect request (Printf.sprintf "/game/%s" key)
 
 let join_game (request : Dream.request) : Dream.response Lwt.t =
-  let game_name_opt =
+  let game_and_username_opt =
     let open Option.Let_syntax in
     let%bind game = Hashtbl.find games (Dream.param request "game") in
-    let%bind name = Dream.query request "name" in
-    return (game, name)
+    let%bind username = Dream.query request "name" in
+    return (game, username)
   in
-  Dream.log "join_game %b" (Option.is_some game_name_opt);
-  match game_name_opt with
+  match game_and_username_opt with
   | None -> Dream.json ~status:`Bad_Request "null"
   | Some (game, name) -> Dream.websocket (Game.add_player game name)
+
+let game_state (request : Dream.request) : Dream.response Lwt.t =
+  match Hashtbl.find games (Dream.param request "game") with
+  | None -> Dream.json ~status:`Not_Found "null"
+  | Some game -> Dream.json @@ Yojson.Safe.to_string @@ Game.yojson_of_t @@ game
 
 let router : Dream.handler =
   Dream.router
@@ -170,7 +165,8 @@ let router : Dream.handler =
       Dream.get "/" index;
       Dream.post "/game" create_game;
       Dream.get "/game/:game" game_info;
+      Dream.get "/game/:game/state" game_state;
       Dream.get "/join/:game" join_game;
     ]
 
-let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ Dream.flash @@ router
+let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router

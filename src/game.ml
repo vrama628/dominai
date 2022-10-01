@@ -463,6 +463,13 @@ module Player = struct
     cards : Cards.t;
   }
 
+  module PublicState = struct
+    type t = { name : string } [@@deriving yojson_of]
+  end
+
+  let yojson_of_t { name; _ } : Yojson.Safe.t =
+    PublicState.({ name } |> yojson_of_t)
+
   let create
       ~(name : string)
       ~(websocket : Dream.websocket)
@@ -683,6 +690,9 @@ module CurrentPlayer = struct
     turn_status : TurnStatus.t;
   }
 
+  let yojson_of_t { player; turn_status = _ } : Yojson.Safe.t =
+    Player.yojson_of_t player
+
   let name { player; _ } = Player.name player
 
   let turn_info
@@ -735,15 +745,19 @@ type turn = {
   current_player : CurrentPlayer.t;
   next_players : Player.t list;
 }
+[@@deriving yojson_of]
 
 type state =
   | PreStart of { players : Player.t list }
   | Turn of turn
+[@@deriving yojson_of]
 
 type t = {
   state : state React.signal;
   set : state -> unit;
 }
+
+let yojson_of_t { state; set = _ } = yojson_of_state @@ React.S.value @@ state
 
 let randomizer_cards =
   let open Card in
