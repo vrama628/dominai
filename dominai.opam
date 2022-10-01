@@ -16,6 +16,9 @@ depends: [
   "tyxml"
   "omd"
   "base64"
+  "js_of_ocaml"
+  "js_of_ocaml-ppx"
+  "js_of_ocaml-tyxml"
   "odoc" {with-doc}
 ]
 build: [
