@@ -1,6 +1,12 @@
 (executable
  (name game_info)
- (libraries js_of_ocaml js_of_ocaml-tyxml js_of_ocaml-lwt yojson base)
+ (libraries
+  dominai
+  js_of_ocaml
+  js_of_ocaml-tyxml
+  js_of_ocaml-lwt
+  yojson
+  base)
  (modes js)
  (preprocess
   (pps js_of_ocaml-ppx lwt_ppx ppx_yojson_conv)))

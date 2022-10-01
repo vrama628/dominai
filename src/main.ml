@@ -132,7 +132,8 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
         txt
           "To invite a friend to this game, send them the URL that's in your \
            address bar.";
-        div ~a:[a_class ["bg-light"; "rounded"]; a_id "app"] [];
+        div [txt "Current game status:"];
+        div ~a:[a_id "app"] [];
       ]
   in
   tyxml
