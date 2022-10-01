@@ -21,4 +21,5 @@
   base64
   js_of_ocaml
   js_of_ocaml-ppx
-  js_of_ocaml-tyxml))
+  js_of_ocaml-tyxml
+  js_of_ocaml-lwt))
