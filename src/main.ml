@@ -75,16 +75,16 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
         div
           ~a:[a_class ["form-group"]]
           [
-            label ~a:[a_label_for "name"] [txt "Username:"];
-            input
-              ~a:
-                [
-                  a_input_type `Text;
-                  a_class ["form-control"];
-                  a_id "name";
-                  a_name "name";
-                ]
-              ();
+            label ~a:[a_label_for "num_players"] [txt "Number of players:"];
+            select
+              ~a:[a_id "num_players"; a_name "num_players"]
+              [
+                option ~a:[a_value "2"] (txt "2");
+                option ~a:[a_value "3"] (txt "3");
+                option ~a:[a_value "4"] (txt "4");
+                option ~a:[a_value "5"] (txt "5");
+                option ~a:[a_value "6"] (txt "6");
+              ];
           ];
         button
           ~a:
@@ -161,10 +161,14 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
            ]
 
 let create_game (request : Dream.request) : Dream.response Lwt.t =
-  let game = Game.create () in
-  let key = generate_game_key () in
-  Hashtbl.add_exn games ~key ~data:game;
-  Dream.redirect request (Printf.sprintf "/game/%s" key)
+  match%lwt Dream.form ~csrf:false request with
+  | `Ok [("num_players", num_players_str)] ->
+    let num_players = Int.of_string num_players_str in
+    let game = Game.create ~num_players in
+    let key = generate_game_key () in
+    Hashtbl.add_exn games ~key ~data:game;
+    Dream.redirect request (Printf.sprintf "/game/%s" key)
+  | _ -> Dream.empty `Bad_Request
 
 let join_game (request : Dream.request) : Dream.response Lwt.t =
   let game_and_username_opt =

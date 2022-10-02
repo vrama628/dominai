@@ -24,7 +24,10 @@ type turn = {
 [@@deriving of_yojson]
 
 type state =
-  | PreStart of { players : player list }
+  | PreStart of {
+      players : player list;
+      num_players : int;
+    }
   | Turn of turn
 [@@deriving of_yojson]
 
@@ -35,7 +38,9 @@ let fetch_game_state () : state Lwt.t =
   content |> Yojson.Safe.from_string |> state_of_yojson |> Lwt.return
 
 let game_state_s : state signal =
-  let game_state_s, set_game_state = S.create (PreStart { players = [] }) in
+  let game_state_s, set_game_state =
+    S.create (PreStart { players = []; num_players = 0 })
+  in
   let rec poll_game_state_loop () =
     let%lwt game_state = fetch_game_state () in
     set_game_state game_state;
@@ -48,10 +53,19 @@ let game_state_s : state signal =
 let render_game_state (game_state : state) : Html_types.div Html.elt =
   let open Html in
   match game_state with
-  | PreStart { players } ->
+  | PreStart { players; num_players } ->
     div
       [
-        div [txt "Waiting for game to start. Players currently in game:"];
+        div
+          [
+            txt
+              (Printf.sprintf
+                 "Game will start when %d players have joined. %d players \
+                  currently in game:"
+                 num_players
+                 (List.length players)
+              );
+          ];
         ( if List.is_empty players then
           txt "none"
         else

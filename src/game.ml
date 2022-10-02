@@ -751,7 +751,10 @@ type turn = {
 [@@deriving yojson_of]
 
 type state =
-  | PreStart of { players : Player.t list }
+  | PreStart of {
+      num_players : int;
+      players : Player.t list;
+    }
   | Turn of turn
 [@@deriving yojson_of]
 
@@ -1566,26 +1569,29 @@ let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info errorable =
       )
   | _ -> error "It is not your turn."
 
-let create () : t =
-  let state, set = React.S.create ~eq:phys_equal (PreStart { players = [] }) in
+let create ~(num_players : int) : t =
+  assert (2 <= num_players && num_players <= 6);
+  let state, set =
+    React.S.create ~eq:phys_equal (PreStart { num_players; players = [] })
+  in
   { state; set }
 
 (** removes player from game when they disconnect *)
 let on_disconnect ~(game : t) ~(name : string) : unit =
   let new_state =
     match React.S.value game.state with
-    | PreStart { players } ->
+    | PreStart { num_players; players } ->
       let players =
         List.filter players ~f:(fun player ->
             String.( <> ) player.Player.name name
         )
       in
-      PreStart { players }
+      PreStart { num_players; players }
     | Turn turn ->
       if String.equal turn.current_player.CurrentPlayer.player.Player.name name
       then (
         match turn.next_players with
-        | [] -> PreStart { players = [] }
+        | [] -> PreStart { num_players = 2; players = [] }
         | player :: next_players ->
           Lwt.async (fun () ->
               start_turn
@@ -1612,7 +1618,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
 let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     unit Lwt.t =
   match React.S.value game.state with
-  | PreStart { players } ->
+  | PreStart { num_players; players } ->
     if
       List.exists players ~f:(fun player -> String.equal name player.Player.name)
     then
@@ -1636,9 +1642,9 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         Player.create ~name ~websocket ~handler ~on_disconnect
       in
       let players = player :: players in
-      if List.length players >= 2 then
+      if List.length players >= num_players then
         Lwt.async (fun () -> start_game ~game ~players)
       else
-        game.set (PreStart { players });
+        game.set (PreStart { num_players; players });
       promise
   | _ -> failwith "Game has already started."
