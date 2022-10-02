@@ -56,8 +56,8 @@ let template
        ]
     )
 
-let tyxml (html : doc) : Dream.response Lwt.t =
-  Format.asprintf "%a" (pp ()) html |> Dream.html
+let tyxml ?(status : Dream.status option) (html : doc) : Dream.response Lwt.t =
+  Format.asprintf "%a" (pp ()) html |> Dream.html ?status
 
 let markdown (md : string) : [> Html_types.txt ] elt =
   md |> Omd.of_string |> Omd.to_html |> Unsafe.data
@@ -111,40 +111,54 @@ let generate_username () : string =
     (List.random_element_exn Static.nouns)
 
 let game_info (request : Dream.request) : Dream.response Lwt.t =
-  let copy_game_uri =
-    let host_uri = Dream.header request "Host" |> Option.value_exn in
-    let game_key = Dream.param request "game" in
-    let join_uri =
-      Printf.sprintf
-        "http://%s/join/%s?name=%s"
-        host_uri
-        game_key
-        (generate_username ())
+  let game_key = Dream.param request "game" in
+  if Hashtbl.find games game_key |> Option.is_none then
+    tyxml ~status:`Not_Found
+    @@ template
+         ~title:"Game Not Found | Dominai"
+         ~content:
+           [
+             div
+               ~a:[a_class ["text-center"]]
+               [
+                 txt "Game not found. ";
+                 a ~a:[a_href "/"] [txt "Return to home."];
+               ];
+           ]
+  else
+    let copy_game_uri =
+      let host_uri = Dream.header request "Host" |> Option.value_exn in
+      let join_uri =
+        Printf.sprintf
+          "http://%s/join/%s?name=%s"
+          host_uri
+          game_key
+          (generate_username ())
+      in
+      div
+        [
+          txt
+            "To connect your code to this DominAI game, send a GET request to \
+             the below URL.";
+          div
+            ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
+            [txt join_uri];
+          txt
+            "To invite a friend to this game, send them the URL that's in your \
+             address bar.";
+          div [txt "Current game status:"];
+          div ~a:[a_id "app"] [];
+        ]
     in
-    div
-      [
-        txt
-          "To connect your code to this DominAI game, send a GET request to \
-           the below URL.";
-        div
-          ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
-          [txt join_uri];
-        txt
-          "To invite a friend to this game, send them the URL that's in your \
-           address bar.";
-        div [txt "Current game status:"];
-        div ~a:[a_id "app"] [];
-      ]
-  in
-  tyxml
-  @@ template
-       ~title:"DominAI"
-       ~content:
-         [
-           h1 [txt "DominAI Game"];
-           copy_game_uri;
-           script (cdata_script Static.Js.game_info);
-         ]
+    tyxml
+    @@ template
+         ~title:"Game | DominAI"
+         ~content:
+           [
+             h1 [txt "DominAI Game"];
+             copy_game_uri;
+             script (cdata_script Static.Js.game_info);
+           ]
 
 let create_game (request : Dream.request) : Dream.response Lwt.t =
   let game = Game.create () in
