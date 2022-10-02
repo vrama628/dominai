@@ -77,7 +77,12 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
           [
             label ~a:[a_label_for "num_players"] [txt "Number of players:"];
             select
-              ~a:[a_id "num_players"; a_name "num_players"]
+              ~a:
+                [
+                  a_id "num_players";
+                  a_name "num_players";
+                  a_class ["form-control"];
+                ]
               [
                 option ~a:[a_value "2"] (txt "2");
                 option ~a:[a_value "3"] (txt "3");
