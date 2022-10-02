@@ -476,11 +476,14 @@ module Player = struct
       ~(handler :
          player_to_game_request ->
          (Jsonrpc.Json.t, Jsonrpc.Response.Error.t) result Lwt.t
-         ) : unit Lwt.t * t =
+         )
+      ~(on_disconnect : unit -> unit) : unit Lwt.t * t =
     let pending = Hashtbl.create (module Int) in
     let rec listen () =
       match%lwt Dream.receive websocket with
-      | None -> Lwt.return_unit
+      | None ->
+        on_disconnect ();
+        Lwt.return_unit
       | Some message ->
         begin
           match
@@ -1567,6 +1570,45 @@ let create () : t =
   let state, set = React.S.create ~eq:phys_equal (PreStart { players = [] }) in
   { state; set }
 
+(** removes player from game when they disconnect *)
+let on_disconnect ~(game : t) ~(name : string) : unit =
+  let new_state =
+    match React.S.value game.state with
+    | PreStart { players } ->
+      let players =
+        List.filter players ~f:(fun player ->
+            String.( <> ) player.Player.name name
+        )
+      in
+      PreStart { players }
+    | Turn turn ->
+      if String.equal turn.current_player.CurrentPlayer.player.Player.name name
+      then (
+        match turn.next_players with
+        | [] -> PreStart { players = [] }
+        | player :: next_players ->
+          Lwt.async (fun () ->
+              start_turn
+                ~game
+                ~kingdom:turn.kingdom
+                ~supply:turn.supply
+                ~trash:turn.trash
+                ~player
+                ~next_players
+          );
+          Turn turn
+      ) else
+        Turn
+          {
+            turn with
+            next_players =
+              List.filter turn.next_players ~f:(fun player ->
+                  String.( <> ) player.Player.name name
+              );
+          }
+  in
+  game.set new_state
+
 let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     unit Lwt.t =
   match React.S.value game.state with
@@ -1589,7 +1631,10 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         | Buy { card } ->
           buy ~game ~card ~name |> Lwt.map (Result.map ~f:yojson_of_turn_info)
       in
-      let promise, player = Player.create ~name ~websocket ~handler in
+      let on_disconnect () = on_disconnect ~game ~name in
+      let promise, player =
+        Player.create ~name ~websocket ~handler ~on_disconnect
+      in
       let players = player :: players in
       if List.length players >= 2 then
         Lwt.async (fun () -> start_game ~game ~players)
