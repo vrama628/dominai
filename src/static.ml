@@ -28,4 +28,6 @@ module Js = struct
     content
 
   let game_info = js "game_info"
+
+  let player_ui = js "player_ui"
 end

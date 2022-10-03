@@ -1,5 +1,5 @@
-(executable
- (name game_info)
+(executables
+ (names game_info player_ui)
  (libraries
   dominai
   js_of_ocaml
@@ -13,4 +13,4 @@
 
 (alias
  (name app)
- (deps game_info.bc.js))
+ (deps game_info.bc.js player_ui.bc.js))

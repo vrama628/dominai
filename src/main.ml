@@ -115,21 +115,22 @@ let generate_username () : string =
     (List.random_element_exn Static.adjectives)
     (List.random_element_exn Static.nouns)
 
+let not_found_page : Dream.response Lwt.t =
+  tyxml ~status:`Not_Found
+  @@ template
+       ~title:"Game Not Found | Dominai"
+       ~content:
+         [
+           div
+             ~a:[a_class ["text-center"]]
+             [txt "Game not found. "; a ~a:[a_href "/"] [txt "Return to home."]];
+         ]
+
 let game_info (request : Dream.request) : Dream.response Lwt.t =
   let game_key = Dream.param request "game" in
+  let player_ui_url = Printf.sprintf "/game/%s/ui" game_key in
   if Hashtbl.find games game_key |> Option.is_none then
-    tyxml ~status:`Not_Found
-    @@ template
-         ~title:"Game Not Found | Dominai"
-         ~content:
-           [
-             div
-               ~a:[a_class ["text-center"]]
-               [
-                 txt "Game not found. ";
-                 a ~a:[a_href "/"] [txt "Return to home."];
-               ];
-           ]
+    not_found_page
   else
     let copy_game_uri =
       let host_uri = Dream.header request "Host" |> Option.value_exn in
@@ -142,16 +143,37 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
       in
       div
         [
-          txt
-            "To connect your code to this DominAI game, send a GET request to \
-             the below URL.";
+          div
+            [
+              txt
+                "To connect your code to this DominAI game, send a GET request \
+                 to the below URL.";
+            ];
           div
             ~a:[a_class ["user-select-all"; "bg-light"; "rounded"; "p-3"]]
             [txt join_uri];
-          txt
-            "To invite a friend to this game, send them the URL that's in your \
-             address bar.";
-          div [txt "Current game status:"];
+          div
+            [
+              txt
+                "To invite a friend to this game, send them the URL that's in \
+                 your address bar.";
+            ];
+          div
+            ~a:[a_class ["text-end"]]
+            [
+              a
+                ~a:
+                  [
+                    a_href player_ui_url;
+                    a_target "blank";
+                    a_rel [`Noreferrer; `Noopener];
+                  ]
+                [
+                  txt "Click here to join this game yourself via the UI. ";
+                  entity "rarr";
+                ];
+            ];
+          div ~a:[a_class ["mt-4"]] [txt "Current game status:"];
           div ~a:[a_id "app"] [];
         ]
     in
@@ -191,6 +213,23 @@ let game_state (request : Dream.request) : Dream.response Lwt.t =
   | None -> Dream.json ~status:`Not_Found "null"
   | Some game -> Dream.json @@ Yojson.Safe.to_string @@ Game.yojson_of_t @@ game
 
+let player_ui (request : Dream.request) : Dream.response Lwt.t =
+  let game_key = Dream.param request "game" in
+  if Hashtbl.find games game_key |> Option.is_none then
+    not_found_page
+  else
+    tyxml
+    @@ template
+         ~title:"Player UI | DominAI"
+         ~content:
+           [
+             h1 [txt "Player UI"];
+             div
+               ~a:[a_id "app"; Unsafe.string_attrib "data-game-key" game_key]
+               [];
+             script (cdata_script Static.Js.player_ui);
+           ]
+
 let router : Dream.handler =
   Dream.router
     [
@@ -199,6 +238,7 @@ let router : Dream.handler =
       Dream.get "/game/:game" game_info;
       Dream.get "/game/:game/state" game_state;
       Dream.get "/join/:game" join_game;
+      Dream.get "/game/:game/ui" player_ui;
     ]
 
 let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router
