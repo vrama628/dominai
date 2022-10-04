@@ -2,12 +2,11 @@ open Js_of_ocaml
 
 (* open Js_of_ocaml_lwt *)
 open Js_of_ocaml_tyxml.Tyxml_js
-
 open React
 
 (* open ReactiveData *)
 open Base
-(* open Dominai *)
+open Dominai
 
 type connection = Jsonrpc.Packet.t event
 
@@ -32,17 +31,31 @@ let websocket ~(game_key : string) ~(name : string) : connection =
   websocket_js##.onmessage := Dom.handler on_message;
   event
 
-type game_state = unit
+type supply = (Card.t * int) list
+let supply_of_yojson (json : Yojson.Safe.t) : supply =
+  json |> Yojson.Safe.Util.to_assoc |> List.Assoc.map ~f:Card.t_of_yojson
 
-let game_state_to_string (() : game_state) : string = ""
+type turn =
+  | YourTurn
+  | OtherTurn
+
+type game_state =
+  | PreStart
+  | InPlay of {
+      kingdom : Card.t list;
+      supply : supply;
+      turn : turn;
+    }
 
 type app_state =
   | PreJoin
-  | Connected of connection * game_state
+  | Connected of game_state
 
 let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create PreJoin
+
+let connection_handler = function _ -> ()
 
 let game_state_app ~(game_key : string) ~(default_name : string) :
     Html_types.div Html.elt =
@@ -62,7 +75,8 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
           )
         in
         let connection = websocket ~game_key ~name in
-        set_state (Connected (connection, ()));
+        set_state (Connected PreStart);
+        ignore (E.map connection_handler connection);
         false
       in
       div
@@ -90,9 +104,9 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
               ]
             [txt "Join Game"];
         ]
-    | Connected (connection, game_state) ->
-      ignore connection;
-      div [txt (game_state_to_string game_state)]
+    | Connected PreStart -> div [txt "Waiting for game to start ..."]
+    | Connected (InPlay { supply; turn }) ->
+      div [div [txt "Supply:"; div ~a:[a_class ["d-flex"]] (List.map supply ~f:(fun (name, ) -> div []))]]
   in
   R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
 
