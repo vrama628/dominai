@@ -335,7 +335,7 @@ module PlayerToGameResponse = struct
 end
 
 type player_to_game_request =
-  | EndTurn of unit
+  | EndTurn of unit [@default ()]
   | Play of {
       card : Card.t;
       (* TODO: move data entirely to separate requests *)
@@ -349,7 +349,7 @@ let method_and_params_of_json = function
   | _ -> failwith "unreachable"
 
 let json_of_method_and_params ~method_ ~params =
-  `List (`String method_ :: Option.to_list params)
+  `List [`String method_; Option.value params ~default:`Null]
 
 let shuffle (list : 'a list) : 'a list =
   let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
@@ -470,6 +470,28 @@ module Player = struct
   let yojson_of_t { name; _ } : Yojson.Safe.t =
     PublicState.({ name } |> yojson_of_t)
 
+  let notify { websocket; _ } (notification : game_to_player_notification) :
+      unit =
+    let method_, params =
+      notification
+      |> yojson_of_game_to_player_notification
+      |> method_and_params_of_json
+    in
+    Lwt.async (fun () ->
+        Jsonrpc.Notification.create ~method_ ~params ()
+        |> Jsonrpc.Notification.yojson_of_t
+        |> Yojson.Safe.to_string
+        |> Dream.send websocket
+    )
+
+  let disconnect (player : t) : unit = Lwt.wakeup player.resolver ()
+
+  (** notifies and disconnects the player *)
+  let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
+    let Jsonrpc.Response.Error.{ message; _ } = error in
+    notify player (FatalError { message });
+    disconnect player
+
   let create
       ~(name : string)
       ~(websocket : Dream.websocket)
@@ -485,6 +507,7 @@ module Player = struct
         on_disconnect ();
         Lwt.return_unit
       | Some message ->
+        Dream.log "Player %s sent %s" name message;
         begin
           match
             message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
@@ -516,11 +539,15 @@ module Player = struct
             )
           | unimplemented ->
             Dream.log
-              "Received unsupported JSONRPC packet: %s"
+              "Player %s sent unsupported JSONRPC packet: %s"
+              name
               (unimplemented
               |> Jsonrpc.Packet.yojson_of_t
               |> Yojson.Safe.pretty_to_string
               )
+          | exception Yojson.Json_error msg ->
+            Dream.log "Player %s: error while parsing JSON: %s" name msg
+          | exception _ -> Dream.log "Unrecognized error while parsing message"
         end;
         listen ()
     in
@@ -587,28 +614,6 @@ module Player = struct
         |> Dream.send websocket
     );
     promise
-
-  let notify { websocket; _ } (notification : game_to_player_notification) :
-      unit =
-    let method_, params =
-      notification
-      |> yojson_of_game_to_player_notification
-      |> method_and_params_of_json
-    in
-    Lwt.async (fun () ->
-        Jsonrpc.Notification.create ~method_ ~params ()
-        |> Jsonrpc.Notification.yojson_of_t
-        |> Yojson.Safe.to_string
-        |> Dream.send websocket
-    )
-
-  let disconnect (player : t) : unit = Lwt.wakeup player.resolver ()
-
-  (** notifies and disconnects the player *)
-  let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
-    let Jsonrpc.Response.Error.{ message; _ } = error in
-    notify player (FatalError { message });
-    disconnect player
 
   let victory_points { cards; _ } : int =
     let all_cards = Cards.all_cards cards in
