@@ -6,7 +6,8 @@
   js_of_ocaml-tyxml
   js_of_ocaml-lwt
   yojson
-  base)
+  base
+  jsonrpc)
  (modes js)
  (preprocess
   (pps js_of_ocaml-ppx lwt_ppx ppx_yojson_conv)))
