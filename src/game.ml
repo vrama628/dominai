@@ -514,7 +514,13 @@ module Player = struct
                 |> Yojson.Safe.to_string
                 |> Dream.send websocket
             )
-          | _ -> failwith "TODO"
+          | unimplemented ->
+            Dream.log
+              "Received unsupported JSONRPC packet: %s"
+              (unimplemented
+              |> Jsonrpc.Packet.yojson_of_t
+              |> Yojson.Safe.pretty_to_string
+              )
         end;
         listen ()
     in
@@ -1642,9 +1648,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         Player.create ~name ~websocket ~handler ~on_disconnect
       in
       let players = player :: players in
+      game.set (PreStart { num_players; players });
       if List.length players >= num_players then
-        Lwt.async (fun () -> start_game ~game ~players)
-      else
-        game.set (PreStart { num_players; players });
+        Lwt.async (fun () -> start_game ~game ~players);
       promise
   | _ -> failwith "Game has already started."
