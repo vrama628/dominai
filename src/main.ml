@@ -225,7 +225,14 @@ let player_ui (request : Dream.request) : Dream.response Lwt.t =
            [
              h1 [txt "Player UI"];
              div
-               ~a:[a_id "app"; Unsafe.string_attrib "data-game-key" game_key]
+               ~a:
+                 [
+                   a_id "app";
+                   Unsafe.string_attrib "data-game-key" game_key;
+                   Unsafe.string_attrib
+                     "data-default-name"
+                     (generate_username ());
+                 ]
                [];
              script (cdata_script Static.Js.player_ui);
            ]

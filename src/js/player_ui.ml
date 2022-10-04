@@ -44,7 +44,8 @@ let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create PreJoin
 
-let game_state_app ~(game_key : string) : Html_types.div Html.elt =
+let game_state_app ~(game_key : string) ~(default_name : string) :
+    Html_types.div Html.elt =
   let open Html in
   let render = function
     | PreJoin ->
@@ -65,13 +66,20 @@ let game_state_app ~(game_key : string) : Html_types.div Html.elt =
         false
       in
       div
-        ~a:[a_class ["d-grid"; "col-md-6"; "mx-auto"]]
         [
           div
             ~a:[a_class ["form-group"]]
             [
               label ~a:[a_label_for "name"] [txt "Name:"];
-              input ~a:[a_id "name"; a_name "name"; a_class ["form-control"]] ();
+              input
+                ~a:
+                  [
+                    a_id "name";
+                    a_name "name";
+                    a_class ["form-control"];
+                    a_value default_name;
+                  ]
+                ();
             ];
           button
             ~a:
@@ -88,18 +96,21 @@ let game_state_app ~(game_key : string) : Html_types.div Html.elt =
   in
   R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
 
+let get_data_attribute (container : Dom_html.element Js.t) (attribute : string)
+    : string =
+  let game_key_js_opt = container##getAttribute (Js.string attribute) in
+  Js.Opt.case
+    game_key_js_opt
+    (fun () -> failwith "attribute not set")
+    Js.to_string
+
 let main () : unit Lwt.t =
   let app_container = Dom_html.getElementById_exn "app" in
-  let game_key =
-    let game_key_js_opt =
-      app_container##getAttribute (Js.string "data-game-key")
-    in
-    Js.Opt.case
-      game_key_js_opt
-      (fun () -> failwith "data-game-key not set")
-      Js.to_string
-  in
-  Dom.appendChild app_container (To_dom.of_element (game_state_app ~game_key));
+  let game_key = get_data_attribute app_container "data-game-key" in
+  let default_name = get_data_attribute app_container "data-default-name" in
+  Dom.appendChild
+    app_container
+    (To_dom.of_element (game_state_app ~game_key ~default_name));
   Lwt.return_unit
 
 let () = Lwt.async main
