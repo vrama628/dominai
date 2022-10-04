@@ -335,11 +335,11 @@ module PlayerToGameResponse = struct
 end
 
 type player_to_game_request =
-  | EndTurn of unit [@default ()]
+  | EndTurn of unit
   | Play of {
       card : Card.t;
       (* TODO: move data entirely to separate requests *)
-      data : data;
+      data : data; [@default `Null]
     }
   | Buy of { card : Card.t }
 [@@deriving of_yojson]
