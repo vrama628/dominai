@@ -538,16 +538,69 @@ module Player = struct
                 |> Dream.send websocket
             )
           | unimplemented ->
+            let unimplemented_msg =
+              unimplemented
+              |> Jsonrpc.Packet.yojson_of_t
+              |> Yojson.Safe.pretty_to_string
+            in
             Dream.log
               "Player %s sent unsupported JSONRPC packet: %s"
               name
-              (unimplemented
-              |> Jsonrpc.Packet.yojson_of_t
-              |> Yojson.Safe.pretty_to_string
-              )
+              unimplemented_msg;
+            let message =
+              Printf.sprintf "Unsupported JSON-RPC message %s" unimplemented_msg
+            in
+            let notification =
+              Jsonrpc.Notification.create
+                ~method_:"Error"
+                ~params:(`Assoc ["message", `String message])
+                ()
+            in
+            Lwt.async (fun () ->
+                Dream.send
+                  websocket
+                  (Jsonrpc.Notification.yojson_of_t notification
+                  |> Yojson.Safe.to_string
+                  )
+            )
           | exception Yojson.Json_error msg ->
-            Dream.log "Player %s: error while parsing JSON: %s" name msg
-          | exception _ -> Dream.log "Unrecognized error while parsing message"
+            Dream.log "Player %s: error while parsing JSON: %s" name msg;
+            let message = Printf.sprintf "Invalid JSON %s" msg in
+            let notification =
+              Jsonrpc.Notification.create
+                ~method_:"Error"
+                ~params:(`Assoc ["message", `String message])
+                ()
+            in
+            Lwt.async (fun () ->
+                Dream.send
+                  websocket
+                  (Jsonrpc.Notification.yojson_of_t notification
+                  |> Yojson.Safe.to_string
+                  )
+            )
+          | exception exn ->
+            Dream.log
+              "Unrecognized error while parsing message: %s"
+              (Exn.to_string_mach exn);
+            let message =
+              Printf.sprintf
+                "Encountered error while parsing message: %s"
+                (Exn.to_string_mach exn)
+            in
+            let notification =
+              Jsonrpc.Notification.create
+                ~method_:"Error"
+                ~params:(`Assoc ["message", `String message])
+                ()
+            in
+            Lwt.async (fun () ->
+                Dream.send
+                  websocket
+                  (Jsonrpc.Notification.yojson_of_t notification
+                  |> Yojson.Safe.to_string
+                  )
+            )
         end;
         listen ()
     in
