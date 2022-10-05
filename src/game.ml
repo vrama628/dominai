@@ -1062,14 +1062,17 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let player = Player.draw_n 1 current_player.player in
     let turn_status = TurnStatus.add_actions 1 turn_status in
     let Player.Cards.{ discard; _ } = player.cards in
-    let%lwt response = Player.request player (Harbinger { discard }) in
-    let%bind PlayerToGameResponse.Harbinger.{ card } =
-      parse PlayerToGameResponse.Harbinger.t_of_yojson response
-    in
     let%bind discard =
-      match find_and_remove card discard with
-      | None -> error "Card %s not in discard pile." (Card.to_string card)
-      | Some discard -> return discard
+      if List.is_empty discard then
+        return discard
+      else
+        let%lwt response = Player.request player (Harbinger { discard }) in
+        let%bind PlayerToGameResponse.Harbinger.{ card } =
+          parse PlayerToGameResponse.Harbinger.t_of_yojson response
+        in
+        match find_and_remove card discard with
+        | None -> error "Card %s not in discard pile." (Card.to_string card)
+        | Some discard -> return discard
     in
     let player = { player with cards = { player.cards with discard } } in
     let player = Player.topdeck card player in
