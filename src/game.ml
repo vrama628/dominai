@@ -393,6 +393,13 @@ module Player = struct
       discard : Card.t list;
     }
 
+    let debug_str { deck; hand; discard } : string =
+      Printf.sprintf
+        "{ deck=%s; hand=%s; discard=%s }"
+        (List.to_string ~f:Card.to_string deck)
+        (List.to_string ~f:Card.to_string hand)
+        (List.to_string ~f:Card.to_string discard)
+
     let take_from_deck (cards : t) : (Card.t * t) option =
       let cards =
         match cards with
@@ -462,6 +469,13 @@ module Player = struct
     pending : (int, Yojson.Safe.t Lwt.u) Hashtbl.t;
     cards : Cards.t;
   }
+
+  let log { name; cards; pending; _ } : unit =
+    Dream.log
+      "Player %s: Cards=%s, pending=%s"
+      name
+      (Cards.debug_str cards)
+      (Hashtbl.keys pending |> List.to_string ~f:Int.to_string)
 
   module PublicState = struct
     type t = { name : string } [@@deriving yojson_of]
@@ -913,6 +927,8 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
       }
     when String.equal (CurrentPlayer.name current_player) name ->
     let prev_player = CurrentPlayer.clean_up current_player in
+    Dream.log "Player %s just ended their turn" name;
+    Player.log prev_player;
     let end_turn_response =
       let hand = Player.get_hand prev_player in
       let discard = Player.get_discard prev_player in
