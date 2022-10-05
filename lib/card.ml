@@ -47,7 +47,8 @@ let yojson_of_t card =
 
 let t_of_yojson json = t_of_yojson (`List [json])
 
-let to_string (card : t) : string = card |> yojson_of_t |> Yojson.Safe.to_string
+let to_string (card : t) : string =
+  card |> yojson_of_t |> Yojson.Safe.Util.to_string
 
 let is_action = function
   | Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse ->
