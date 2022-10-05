@@ -560,7 +560,15 @@ module Player = struct
                 let response =
                   match result with
                   | Ok json -> Jsonrpc.Response.ok id json
-                  | Error error -> Jsonrpc.Response.error id error
+                  | Error error ->
+                    Dream.log
+                      "Player %s error: %s"
+                      name
+                      (error
+                      |> Jsonrpc.Response.Error.yojson_of_t
+                      |> Yojson.Safe.to_string
+                      );
+                    Jsonrpc.Response.error id error
                 in
                 response
                 |> Jsonrpc.Response.yojson_of_t
@@ -809,11 +817,13 @@ type turn = {
 
 type kingdom_selection =
   | FirstGame
+  | DeckTop
   | Random
 [@@deriving yojson_of]
 
 let kingdom_selection_of_string = function
   | "first_game" -> FirstGame
+  | "deck_top" -> DeckTop
   | "random" -> Random
   | other ->
     Dream.log "Invalid kingdom selection %s" other;
@@ -974,6 +984,20 @@ let start_game
           Smithy;
           Village;
           Workshop;
+        ]
+    | DeckTop ->
+      Card.
+        [
+          Artisan;
+          Bureaucrat;
+          CouncilRoom;
+          Festival;
+          Harbinger;
+          Laboratory;
+          Moneylender;
+          Sentry;
+          Vassal;
+          Village;
         ]
     | Random -> List.take (shuffle randomizer_cards) 10
   in
