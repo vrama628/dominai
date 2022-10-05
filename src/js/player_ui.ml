@@ -33,7 +33,11 @@ let websocket ~(game_key : string) ~(name : string) : connection =
 
 type supply = (Card.t * int) list
 let supply_of_yojson (json : Yojson.Safe.t) : supply =
-  json |> Yojson.Safe.Util.to_assoc |> List.Assoc.map ~f:Card.t_of_yojson
+  json
+  |> Yojson.Safe.Util.to_assoc
+  |> List.map ~f:(fun (card, amount) ->
+         Card.t_of_yojson (`String card), Yojson.Safe.Util.to_int amount
+     )
 
 type turn =
   | YourTurn
@@ -47,6 +51,12 @@ type game_state =
       turn : turn;
     }
 
+let () =
+  ignore YourTurn;
+  ignore OtherTurn;
+  ignore supply_of_yojson;
+  ignore (InPlay { kingdom = []; supply = []; turn = OtherTurn })
+
 type app_state =
   | PreJoin
   | Connected of game_state
@@ -55,7 +65,7 @@ let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create PreJoin
 
-let connection_handler = function _ -> ()
+let connection_handler (packet : Jsonrpc.Packet.t) = ignore packet
 
 let game_state_app ~(game_key : string) ~(default_name : string) :
     Html_types.div Html.elt =
@@ -105,8 +115,33 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
             [txt "Join Game"];
         ]
     | Connected PreStart -> div [txt "Waiting for game to start ..."]
-    | Connected (InPlay { supply; turn }) ->
-      div [div [txt "Supply:"; div ~a:[a_class ["d-flex"]] (List.map supply ~f:(fun (name, ) -> div []))]]
+    | Connected (InPlay { supply; turn; kingdom = _ }) ->
+      div
+        [
+          div
+            [
+              txt "Supply:";
+              div
+                ~a:[a_class ["d-flex"]]
+                (List.map supply ~f:(fun (card, amount) ->
+                     div
+                       [
+                         txt (Card.to_string card);
+                         txt ": ";
+                         txt (Int.to_string amount);
+                       ]
+                 )
+                );
+            ];
+          div
+            [
+              txt
+                ( match turn with
+                | YourTurn -> "your turn"
+                | OtherTurn -> "not your turn"
+                );
+            ];
+        ]
   in
   R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
 

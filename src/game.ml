@@ -1,46 +1,7 @@
 open Core
 open Dominai
-
-module Errorable = struct
-  type 'a errorable = ('a, Jsonrpc.Response.Error.t) result Lwt.t
-
-  let return (x : 'a) : 'a errorable = Lwt.return (Ok x)
-
-  let error (fmt : ('r, unit, string, 'a errorable) format4) : 'r =
-    Printf.ksprintf
-      (fun message ->
-        Lwt.return
-          (Error
-             Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
-          )
-      )
-      fmt
-
-  let ensure
-      (condition : bool)
-      (fmt : ('r, unit, string, unit errorable) format4) : 'r =
-    Printf.ksprintf
-      (fun message ->
-        Lwt.return
-          ( if condition then
-            Ok ()
-          else
-            Error
-              Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
-          )
-      )
-      fmt
-
-  module Let_syntax = struct
-    let bind (x : 'a errorable) ~(f : 'a -> 'b errorable) : 'b errorable =
-      match%lwt x with Ok y -> f y | Error e -> Lwt.return (Error e)
-  end
-end
+open Api
 open Errorable
-
-type data = Yojson.Safe.t
-let data_of_yojson = Fn.id
-let yojson_of_data = Fn.id
 
 module Play = struct
   module Cellar = struct
@@ -86,177 +47,13 @@ module Play = struct
 end
 
 let parse (t_of_yojson : Yojson.Safe.t -> 'a) (data : Yojson.Safe.t) :
-    'a errorable =
+    'a Errorable.t =
   try return (t_of_yojson data)
   with Ppx_yojson_conv_lib.Yojson_conv.Of_yojson_error (e, json) ->
     error
       "Invalid format of data field:\ndata: %s\nerror: %s"
       (Yojson.Safe.to_string json)
       (Exn.to_string e)
-
-module CardComparator = struct
-  type t = Card.t
-
-  (* what broken nonsense is this jane street *)
-  include Comparator.Make (Card)
-end
-
-module Supply = struct
-  type t = (Card.t, int, CardComparator.comparator_witness) Map.t
-
-  let initial_supply_of_card : Card.t -> int = function
-    | Card.Gardens -> 12
-    | _ -> 10
-
-  let create ~kingdom ~n_players : t =
-    let copper =
-      let initial_copper =
-        if n_players > 4 then
-          60
-        else
-          120
-      in
-      initial_copper - (7 * n_players)
-    in
-    let silver =
-      if n_players > 4 then
-        40
-      else
-        80
-    in
-    let gold =
-      if n_players > 4 then
-        30
-      else
-        60
-    in
-    let (estate as duchy) = match n_players with 2 -> 8 | _ -> 12 in
-    let province =
-      match n_players with
-      | 2 -> 8
-      | 3 | 4 -> 12
-      | 5 -> 15
-      | 6 -> 18
-      | _ -> failwith "invalid number of players"
-    in
-    let curse =
-      match n_players with
-      | 2 -> 10
-      | 3 -> 20
-      | 4 -> 30
-      | 5 -> 40
-      | 6 -> 50
-      | _ -> failwith "unreachable"
-    in
-    let kingdom_supply =
-      List.map kingdom ~f:(fun card -> card, initial_supply_of_card card)
-    in
-    Map.of_alist_exn
-      (module CardComparator)
-      Card.(
-        (Copper, copper)
-        :: (Silver, silver)
-        :: (Gold, gold)
-        :: (Estate, estate)
-        :: (Duchy, duchy)
-        :: (Province, province)
-        :: (Curse, curse)
-        :: kingdom_supply
-      )
-
-  let yojson_of_t (supply : t) : Yojson.Safe.t =
-    `Assoc
-      (Map.fold supply ~init:[] ~f:(fun ~key ~data acc ->
-           (Card.yojson_of_t key |> Yojson.Safe.Util.to_string, `Int data)
-           :: acc
-       )
-      )
-
-  let take (card : Card.t) (supply : t) : t errorable =
-    match Map.find supply card with
-    | None -> error "Card %s not in kingdom." (Card.to_string card)
-    | Some n when n > 0 -> return (Map.set supply ~key:card ~data:(n - 1))
-    | _ -> error "No supply of %s remaining." (Card.to_string card)
-
-  let empty_piles : t -> int = Map.count ~f:(( = ) 0)
-
-  (** assumes 2-4 players *)
-  let game_is_over (supply : t) : bool =
-    empty_piles supply >= 3 || Map.find_exn supply Card.Province <= 0
-end
-
-type turn_phase =
-  | Action
-  | Buy
-[@@deriving yojson_of]
-
-type trash = Card.t list [@@deriving yojson_of]
-
-type turn_info = {
-  hand : Card.t list;
-  discard : int;
-  deck : int;
-  supply : Supply.t;
-  trash : trash;
-  buys : int;
-  actions : int;
-  treasure : int;
-  in_play : Card.t list;
-  phase : turn_phase;
-}
-[@@deriving yojson_of]
-
-type game_over_result =
-  | Win
-  | Lose
-[@@deriving yojson_of]
-
-let yojson_of_game_over_result (game_over_result : game_over_result) :
-    Yojson.Safe.t =
-  match yojson_of_game_over_result game_over_result with
-  | `List [name] -> name
-  | _ -> failwith "unreachable"
-
-type scores = (string * int) list
-
-let yojson_of_scores (scores : scores) : Yojson.Safe.t =
-  `Assoc (List.Assoc.map ~f:(fun score -> `Int score) scores)
-
-type game_to_player_notification =
-  | StartTurn of turn_info
-  | FatalError of { message : string }
-  | GameOver of {
-      result : game_over_result;
-      scores : scores;
-    }
-[@@deriving yojson_of]
-
-(* TODO: move into module *)
-type game_to_player_request =
-  | StartGame of {
-      kingdom : Card.t list;
-      order : string list;
-    }
-  | Attack of {
-      card : Card.t;
-      data : data;
-    }
-  | Harbinger of { discard : Card.t list }
-  | Vassal of { card : Card.t }
-  | Poacher of {
-      hand : Card.t list;
-      empty_supply_piles : int;
-    }
-  | ThroneRoom of { card : Card.t }
-  | Library of {
-      card : Card.t;
-      hand : Card.t list;
-    }
-  | Sentry of {
-      hand : Card.t list;
-      cards : Card.t list;
-    }
-[@@deriving yojson_of]
 
 module GameToPlayerRequest = struct
   module Attack = struct
@@ -333,23 +130,6 @@ module PlayerToGameResponse = struct
     type t = card_placement list [@@deriving of_yojson]
   end
 end
-
-type player_to_game_request =
-  | EndTurn of unit
-  | Play of {
-      card : Card.t;
-      (* TODO: move data entirely to separate requests *)
-      data : data;
-    }
-  | Buy of { card : Card.t }
-[@@deriving of_yojson]
-
-let method_and_params_of_json = function
-  | `List [`String method_; `Assoc params] -> method_, `Assoc params
-  | _ -> failwith "unreachable"
-
-let json_of_method_and_params ~method_ ~params =
-  `List (`String method_ :: Option.to_list params)
 
 let shuffle (list : 'a list) : 'a list =
   let tagged = List.map ~f:(fun x -> Random.bits (), x) list in
@@ -437,7 +217,7 @@ module Player = struct
 
     let get_discard { discard; _ } : int = List.length discard
 
-    let remove_from_hand (to_remove : Card.t list) (cards : t) : t errorable =
+    let remove_from_hand (to_remove : Card.t list) (cards : t) : t Errorable.t =
       match is_submultiset to_remove cards.hand with
       | None ->
         error
@@ -545,7 +325,7 @@ module Player = struct
   let clean_up ~(in_play : Card.t list) (player : t) : t =
     { player with cards = Cards.clean_up ~in_play player.cards }
 
-  let remove_from_hand (to_remove : Card.t list) (player : t) : t errorable =
+  let remove_from_hand (to_remove : Card.t list) (player : t) : t Errorable.t =
     let%bind cards = Cards.remove_from_hand to_remove player.cards in
     return { player with cards }
 
@@ -650,7 +430,7 @@ module TurnStatus = struct
   let ensure_buy_phase (turn_status : t) : t = { turn_status with phase = Buy }
 
   (* TODO: roll into expend_treasure, and assert buy phase *)
-  let expend_buy ~(cost : int) turn_status : t errorable =
+  let expend_buy ~(cost : int) turn_status : t Errorable.t =
     let turn_status = ensure_buy_phase turn_status in
     match turn_status.buys > 0, turn_status.treasure >= cost with
     | true, true ->
@@ -663,7 +443,7 @@ module TurnStatus = struct
     | false, _ -> error "No buys left."
     | _, false -> error "Not enough treasure."
 
-  let expend_action turn_status : t errorable =
+  let expend_action turn_status : t Errorable.t =
     match turn_status.phase with
     | Action ->
       if turn_status.actions > 0 then
@@ -706,7 +486,7 @@ module CurrentPlayer = struct
             { buys; actions; treasure; in_play; phase; pending_merchants = _ };
       }
       ~(supply : Supply.t)
-      ~(trash : trash) : turn_info =
+      ~(trash : Trash.t) : turn_info =
     {
       hand = Player.get_hand player;
       discard = Player.get_discard player;
@@ -722,7 +502,7 @@ module CurrentPlayer = struct
 
   (** moves card from hand into play
     * does NOT handle expending actions, adding treasure, etc *)
-  let play_card (card : Card.t) { player; turn_status } : t errorable =
+  let play_card (card : Card.t) { player; turn_status } : t Errorable.t =
     let%bind player = Player.remove_from_hand [card] player in
     let turn_status = TurnStatus.into_play card turn_status in
     return { player; turn_status }
@@ -744,7 +524,7 @@ open CurrentPlayer
 type turn = {
   kingdom : Card.t list;
   supply : Supply.t;
-  trash : Card.t list;
+  trash : Trash.t;
   current_player : CurrentPlayer.t;
   next_players : Player.t list;
 }
@@ -800,7 +580,7 @@ let start_turn
     ~(game : t)
     ~(kingdom : Card.t list)
     ~(supply : Supply.t)
-    ~(trash : Card.t list)
+    ~(trash : Trash.t)
     ~(player : Player.t)
     ~(next_players : Player.t list) : unit Lwt.t =
   let current_player =
@@ -844,7 +624,7 @@ type end_turn_response = {
 }
 [@@deriving yojson_of]
 
-let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
+let end_turn ~(game : t) ~(name : string) : end_turn_response Errorable.t =
   match React.S.value game.state with
   | Turn
       {
@@ -897,7 +677,7 @@ let start_game ~(game : t) ~(players : Player.t list) : unit Lwt.t =
   in
   start_turn ~game ~kingdom ~supply ~trash ~player ~next_players
 
-let react ~(player : Player.t) ~(card : Card.t) : unit errorable =
+let react ~(player : Player.t) ~(card : Card.t) : unit Errorable.t =
   if Card.is_reaction card then
     let%bind _ = Player.remove_from_hand [card] player in
     return ()
@@ -909,7 +689,7 @@ let react ~(player : Player.t) ~(card : Card.t) : unit errorable =
 type play_response = turn_info [@@deriving yojson_of]
 
 let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
-    turn errorable =
+    turn Errorable.t =
   let%bind current_player = CurrentPlayer.play_card card turn.current_player in
   match card with
   (* we could error when people try to play victory cards but we'll just noop *)
@@ -1232,7 +1012,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     (* NOTE: if there are no golds left, the attack won't go through. *)
     let%bind supply = Supply.take Card.Gold turn.supply in
     let player = Player.add_to_discard [Card.Gold] player in
-    let (add_to_trashed, trash_trashed) : (Card.t -> unit) * (trash -> trash) =
+    let (add_to_trashed, trash_trashed) : (Card.t -> unit) * (Trash.t -> Trash.t)
+        =
       let trashed = ref [] in
       let add_to_trashed card = Ref.replace trashed (List.cons card) in
       let trash_trashed trash = !trashed @ trash in
@@ -1346,7 +1127,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let turn_status = TurnStatus.add_actions 1 turn_status in
     return { turn with current_player = { turn_status; player } }
   | Card.Library ->
-    let rec draw_until_7 (player : Player.t) : Player.t errorable =
+    let rec draw_until_7 (player : Player.t) : Player.t Errorable.t =
       if List.length (Player.get_hand current_player.player) >= 7 then
         return player
       else
@@ -1535,7 +1316,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     return { turn with current_player = { turn_status; player }; supply }
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
-    play_response errorable =
+    play_response Errorable.t =
   match React.S.value game.state with
   | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
     let%bind turn = play_card ~turn ~card ~data in
@@ -1549,7 +1330,7 @@ let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
   | _ -> error "It is not your turn."
 
 (* TODO: don't allow playing treasures after buying *)
-let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info errorable =
+let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info Errorable.t =
   match React.S.value game.state with
   | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
     let%bind supply = Supply.take card turn.supply in

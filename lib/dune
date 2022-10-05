@@ -1,6 +1,6 @@
 (library
  (name dominai)
- (libraries)
+ (libraries base jsonrpc)
  (preprocess
   (pps
    lwt_ppx
