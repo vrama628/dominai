@@ -470,8 +470,9 @@ module Player = struct
   let yojson_of_t { name; _ } : Yojson.Safe.t =
     PublicState.({ name } |> yojson_of_t)
 
-  let notify { websocket; _ } (notification : game_to_player_notification) :
-      unit =
+  let notify_websocket
+      ~(websocket : Dream.websocket)
+      (notification : game_to_player_notification) =
     let method_, params =
       notification
       |> yojson_of_game_to_player_notification
@@ -484,13 +485,27 @@ module Player = struct
         |> Dream.send websocket
     )
 
-  let disconnect (player : t) : unit = Lwt.wakeup player.resolver ()
+  let notify { websocket; _ } (notification : game_to_player_notification) :
+      unit =
+    notify_websocket ~websocket notification
+
+  let disconnect_resolver ~(resolver : unit Lwt.u) = Lwt.wakeup resolver ()
+
+  let disconnect ({ resolver; _ } : t) : unit = disconnect_resolver ~resolver
 
   (** notifies and disconnects the player *)
-  let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
+  let fatal_error_message
+      ~(message : string)
+      ~(websocket : Dream.websocket)
+      ~(resolver : unit Lwt.u) : unit =
+    notify_websocket ~websocket (FatalError { message });
+    disconnect_resolver ~resolver
+
+  let fatal_error
+      (error : Jsonrpc.Response.Error.t)
+      ({ websocket; resolver; _ } : t) : unit =
     let Jsonrpc.Response.Error.{ message; _ } = error in
-    notify player (FatalError { message });
-    disconnect player
+    fatal_error_message ~message ~websocket ~resolver
 
   let create
       ~(name : string)
@@ -500,6 +515,7 @@ module Player = struct
          (Jsonrpc.Json.t, Jsonrpc.Response.Error.t) result Lwt.t
          )
       ~(on_disconnect : unit -> unit) : unit Lwt.t * t =
+    let promise, resolver = Lwt.wait () in
     let pending = Hashtbl.create (module Int) in
     let rec listen () =
       match%lwt Dream.receive websocket with
@@ -550,35 +566,11 @@ module Player = struct
             let message =
               Printf.sprintf "Unsupported JSON-RPC message %s" unimplemented_msg
             in
-            let notification =
-              Jsonrpc.Notification.create
-                ~method_:"Error"
-                ~params:(`Assoc ["message", `String message])
-                ()
-            in
-            Lwt.async (fun () ->
-                Dream.send
-                  websocket
-                  (Jsonrpc.Notification.yojson_of_t notification
-                  |> Yojson.Safe.to_string
-                  )
-            )
+            fatal_error_message ~message ~resolver ~websocket
           | exception Yojson.Json_error msg ->
             Dream.log "Player %s: error while parsing JSON: %s" name msg;
             let message = Printf.sprintf "Invalid JSON %s" msg in
-            let notification =
-              Jsonrpc.Notification.create
-                ~method_:"Error"
-                ~params:(`Assoc ["message", `String message])
-                ()
-            in
-            Lwt.async (fun () ->
-                Dream.send
-                  websocket
-                  (Jsonrpc.Notification.yojson_of_t notification
-                  |> Yojson.Safe.to_string
-                  )
-            )
+            fatal_error_message ~message ~resolver ~websocket
           | exception exn ->
             Dream.log
               "Unrecognized error while parsing message: %s"
@@ -588,25 +580,12 @@ module Player = struct
                 "Encountered error while parsing message: %s"
                 (Exn.to_string_mach exn)
             in
-            let notification =
-              Jsonrpc.Notification.create
-                ~method_:"Error"
-                ~params:(`Assoc ["message", `String message])
-                ()
-            in
-            Lwt.async (fun () ->
-                Dream.send
-                  websocket
-                  (Jsonrpc.Notification.yojson_of_t notification
-                  |> Yojson.Safe.to_string
-                  )
-            )
+            fatal_error_message ~message ~resolver ~websocket
         end;
         listen ()
     in
     Lwt.async listen;
     let cards = Cards.create () in
-    let promise, resolver = Lwt.wait () in
     promise, { name; websocket; pending; cards; resolver }
 
   let name { name; _ } : string = name

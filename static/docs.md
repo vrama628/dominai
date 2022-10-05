@@ -223,7 +223,7 @@ Response:
 
 ### `Buy`
 ```
-"Play" // player to game request
+"Buy" // player to game request
 Request:
 {
     card: Card;
