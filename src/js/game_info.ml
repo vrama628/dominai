@@ -23,9 +23,19 @@ type turn = {
 }
 [@@deriving of_yojson]
 
+type kingdom_selection =
+  | FirstGame
+  | Random
+[@@deriving of_yojson]
+
+let string_of_kingdom_selection = function
+  | FirstGame -> "First Game"
+  | Random -> "Random"
+
 type state =
   | PreStart of {
       players : player list;
+      kingdom_selection : kingdom_selection;
       num_players : int;
     }
   | Turn of turn
@@ -39,7 +49,8 @@ let fetch_game_state () : state Lwt.t =
 
 let game_state_s : state signal =
   let game_state_s, set_game_state =
-    S.create (PreStart { players = []; num_players = 0 })
+    S.create
+      (PreStart { players = []; kingdom_selection = Random; num_players = 0 })
   in
   let rec poll_game_state_loop () =
     let%lwt game_state = fetch_game_state () in
@@ -53,15 +64,16 @@ let game_state_s : state signal =
 let render_game_state (game_state : state) : Html_types.div Html.elt =
   let open Html in
   match game_state with
-  | PreStart { players; num_players } ->
+  | PreStart { players; kingdom_selection; num_players } ->
     div
       [
         div
           [
             txt
               (Printf.sprintf
-                 "Game will start when %d players have joined. %d players \
-                  currently in game:"
+                 "Kingdom selection: %s. Game will start when %d players have \
+                  joined. %d players currently in game:"
+                 (string_of_kingdom_selection kingdom_selection)
                  num_players
                  (List.length players)
               );

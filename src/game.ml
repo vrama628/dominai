@@ -793,9 +793,22 @@ type turn = {
 }
 [@@deriving yojson_of]
 
+type kingdom_selection =
+  | FirstGame
+  | Random
+[@@deriving yojson_of]
+
+let kingdom_selection_of_string = function
+  | "first_game" -> FirstGame
+  | "random" -> Random
+  | other ->
+    Dream.log "Invalid kingdom selection %s" other;
+    failwith "Invalid kingdom selection"
+
 type state =
   | PreStart of {
       num_players : int;
+      kingdom_selection : kingdom_selection;
       players : Player.t list;
     }
   | Turn of turn
@@ -923,11 +936,31 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
   | _ -> error "It is not your turn."
 
 (* PRECONDITION: between 2 and 4 players *)
-let start_game ~(game : t) ~(players : Player.t list) : unit Lwt.t =
+let start_game
+    ~(game : t)
+    ~(kingdom_selection : kingdom_selection)
+    ~(players : Player.t list) : unit Lwt.t =
   let player, next_players =
     match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
   in
-  let kingdom = List.take (shuffle randomizer_cards) 10 in
+  let kingdom =
+    match kingdom_selection with
+    | FirstGame ->
+      Card.
+        [
+          Cellar;
+          Market;
+          Merchant;
+          Militia;
+          Mine;
+          Moat;
+          Remodel;
+          Smithy;
+          Village;
+          Workshop;
+        ]
+    | Random -> List.take (shuffle randomizer_cards) 10
+  in
   let supply = Supply.create ~kingdom ~n_players:(List.length players) in
   let trash = [] in
   let order = List.map (player :: next_players) ~f:Player.name in
@@ -1612,10 +1645,12 @@ let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info errorable =
       )
   | _ -> error "It is not your turn."
 
-let create ~(num_players : int) : t =
+let create ~(num_players : int) ~(kingdom_selection : kingdom_selection) : t =
   assert (2 <= num_players && num_players <= 6);
   let state, set =
-    React.S.create ~eq:phys_equal (PreStart { num_players; players = [] })
+    React.S.create
+      ~eq:phys_equal
+      (PreStart { num_players; kingdom_selection; players = [] })
   in
   { state; set }
 
@@ -1623,18 +1658,19 @@ let create ~(num_players : int) : t =
 let on_disconnect ~(game : t) ~(name : string) : unit =
   let new_state =
     match React.S.value game.state with
-    | PreStart { num_players; players } ->
+    | PreStart { num_players; kingdom_selection; players } ->
       let players =
         List.filter players ~f:(fun player ->
             String.( <> ) player.Player.name name
         )
       in
-      PreStart { num_players; players }
+      PreStart { num_players; kingdom_selection; players }
     | Turn turn ->
       if String.equal turn.current_player.CurrentPlayer.player.Player.name name
       then (
         match turn.next_players with
-        | [] -> PreStart { num_players = 2; players = [] }
+        | [] ->
+          PreStart { num_players = 2; kingdom_selection = Random; players = [] }
         | player :: next_players ->
           Lwt.async (fun () ->
               start_turn
@@ -1661,7 +1697,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
 let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     unit Lwt.t =
   match React.S.value game.state with
-  | PreStart { num_players; players } ->
+  | PreStart { num_players; kingdom_selection; players } ->
     if
       List.exists players ~f:(fun player -> String.equal name player.Player.name)
     then
@@ -1685,8 +1721,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         Player.create ~name ~websocket ~handler ~on_disconnect
       in
       let players = player :: players in
-      game.set (PreStart { num_players; players });
+      game.set (PreStart { num_players; kingdom_selection; players });
       if List.length players >= num_players then
-        Lwt.async (fun () -> start_game ~game ~players);
+        Lwt.async (fun () -> start_game ~game ~kingdom_selection ~players);
       promise
   | _ -> failwith "Game has already started."

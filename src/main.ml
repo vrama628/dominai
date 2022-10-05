@@ -91,6 +91,22 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
                 option ~a:[a_value "6"] (txt "6");
               ];
           ];
+        div
+          ~a:[a_class ["form-group"]]
+          [
+            label ~a:[a_label_for "kingdom_selection"] [txt "Kingdom:"];
+            select
+              ~a:
+                [
+                  a_id "kingdom_selection";
+                  a_name "kingdom_selection";
+                  a_class ["form-control"];
+                ]
+              [
+                option ~a:[a_value "first_game"] (txt "First Game");
+                option ~a:[a_value "random"] (txt "Random");
+              ];
+          ];
         button
           ~a:
             [
@@ -167,9 +183,16 @@ let game_info (request : Dream.request) : Dream.response Lwt.t =
 
 let create_game (request : Dream.request) : Dream.response Lwt.t =
   match%lwt Dream.form ~csrf:false request with
-  | `Ok [("num_players", num_players_str)] ->
+  | `Ok
+      [
+        ("kingdom_selection", kingdom_selection_str);
+        ("num_players", num_players_str);
+      ] ->
     let num_players = Int.of_string num_players_str in
-    let game = Game.create ~num_players in
+    let kingdom_selection =
+      Game.kingdom_selection_of_string kingdom_selection_str
+    in
+    let game = Game.create ~num_players ~kingdom_selection in
     let key = generate_game_key () in
     Hashtbl.add_exn games ~key ~data:game;
     Dream.redirect request (Printf.sprintf "/game/%s" key)
