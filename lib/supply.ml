@@ -69,6 +69,14 @@ let yojson_of_t (supply : t) : Yojson.Safe.t =
      )
     )
 
+let t_of_yojson (json : Yojson.Safe.t) : t =
+  json
+  |> Yojson.Safe.Util.to_assoc
+  |> List.map ~f:(fun (card, amount) ->
+         Card.t_of_yojson (`String card), Yojson.Safe.Util.to_int amount
+     )
+  |> Map.of_alist_exn (module CardComparator)
+
 let take (card : Card.t) (supply : t) : t Errorable.t =
   let open Errorable in
   match Map.find supply card with

@@ -8,28 +8,46 @@ open React
 open Base
 open Dominai
 
-type connection = Jsonrpc.Packet.t event
+module Connection = struct
+  type t = {
+    event : Jsonrpc.Packet.t event;
+    send : Jsonrpc.Packet.t -> unit;
+  }
 
-let websocket ~(game_key : string) ~(name : string) : connection =
-  let websocket_js =
-    let host = Dom_html.window##.location##.host in
-    let url =
-      Printf.sprintf "ws://%s/join/%s?name=%s" (Js.to_string host) game_key name
+  let connect ~(game_key : string) ~(name : string) : t =
+    let websocket_js =
+      let host = Dom_html.window##.location##.host in
+      let url =
+        Printf.sprintf
+          "ws://%s/join/%s?name=%s"
+          (Js.to_string host)
+          game_key
+          name
+      in
+      Firebug.console##log url;
+      new%js WebSockets.webSocket (Js.string url)
     in
-    Firebug.console##log url;
-    new%js WebSockets.webSocket (Js.string url)
-  in
-  let event, trigger = E.create () in
-  let on_message (event : 'a WebSockets.messageEvent Js.t) : bool Js.t =
-    trigger
-    @@ Jsonrpc.Packet.t_of_yojson
-    @@ Yojson.Safe.from_string
-    @@ Js.to_string
-    @@ event##.data;
-    Js._false
-  in
-  websocket_js##.onmessage := Dom.handler on_message;
-  event
+    let event, trigger = E.create () in
+    let on_message (event : 'a WebSockets.messageEvent Js.t) : bool Js.t =
+      trigger
+      @@ Jsonrpc.Packet.t_of_yojson
+      @@ Yojson.Safe.from_string
+      @@ Js.to_string
+      @@ event##.data;
+      Js._false
+    in
+    websocket_js##.onmessage := Dom.handler on_message;
+    let send (packet : Jsonrpc.Packet.t) =
+      let packet_js_str =
+        packet
+        |> Jsonrpc.Packet.yojson_of_t
+        |> Yojson.Safe.to_string
+        |> Js.string
+      in
+      websocket_js##send packet_js_str
+    in
+    { event; send }
+end
 
 type supply = (Card.t * int) list
 let supply_of_yojson (json : Yojson.Safe.t) : supply =
@@ -65,7 +83,12 @@ let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create PreJoin
 
-let connection_handler (packet : Jsonrpc.Packet.t) = ignore packet
+let handle_notification : Api.game_to_player_notification -> unit = function
+  | _ -> ()
+
+let handle_request : Api.game_to_player_request -> Yojson.Safe.t Lwt.t =
+  function
+  | _ -> failwith "TODO"
 
 let game_state_app ~(game_key : string) ~(default_name : string) :
     Html_types.div Html.elt =
@@ -84,9 +107,35 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
               failwith "could not find username element"
           )
         in
-        let connection = websocket ~game_key ~name in
+        let connection = Connection.connect ~game_key ~name in
         set_state (Connected PreStart);
-        ignore (E.map connection_handler connection);
+        let connection_handler : Jsonrpc.Packet.t -> unit = function
+          | Jsonrpc.Packet.Notification Jsonrpc.Notification.{ method_; params }
+            ->
+            handle_notification
+              (Api.json_of_method_and_params
+                 ~method_
+                 ~params:(Option.map ~f:Jsonrpc.Structured.yojson_of_t params)
+              |> Api.game_to_player_notification_of_yojson
+              )
+          | Jsonrpc.Packet.Request Jsonrpc.Request.{ method_; params; id } ->
+            Lwt.async (fun () ->
+                let%lwt response =
+                  handle_request
+                    (Api.json_of_method_and_params
+                       ~method_
+                       ~params:
+                         (Option.map ~f:Jsonrpc.Structured.yojson_of_t params)
+                    |> Api.game_to_player_request_of_yojson
+                    )
+                in
+                connection.send
+                  (Jsonrpc.Packet.Response (Jsonrpc.Response.ok id response));
+                Lwt.return_unit
+            )
+          | _ -> failwith "unimplemented"
+        in
+        ignore (E.map connection_handler connection.event);
         false
       in
       div

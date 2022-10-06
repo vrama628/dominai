@@ -1,1 +1,1 @@
-type t = Card.t list [@@deriving yojson_of]
+type t = Card.t list [@@deriving yojson]

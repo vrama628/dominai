@@ -17,7 +17,7 @@ type player_to_game_request =
 type turn_phase =
   | Action
   | Buy
-[@@deriving yojson_of]
+[@@deriving yojson]
 
 type turn_info = {
   hand : Card.t list;
@@ -31,18 +31,21 @@ type turn_info = {
   in_play : Card.t list;
   phase : turn_phase;
 }
-[@@deriving yojson_of]
+[@@deriving yojson]
 
 type game_over_result =
   | Win
   | Lose
-[@@deriving yojson_of]
+[@@deriving yojson]
 
 let yojson_of_game_over_result (game_over_result : game_over_result) :
     Yojson.Safe.t =
   match yojson_of_game_over_result game_over_result with
   | `List [name] -> name
   | _ -> failwith "unreachable"
+
+let game_over_result_of_yojson (json : Yojson.Safe.t) : game_over_result =
+  game_over_result_of_yojson (`List [json])
 
 type game_to_player_notification =
   | StartTurn of turn_info
@@ -51,7 +54,7 @@ type game_to_player_notification =
       result : game_over_result;
       scores : Scores.t;
     }
-[@@deriving yojson_of]
+[@@deriving yojson]
 
 type game_to_player_request =
   | StartGame of {
@@ -77,11 +80,88 @@ type game_to_player_request =
       hand : Card.t list;
       cards : Card.t list;
     }
-[@@deriving yojson_of]
+[@@deriving yojson]
 
 let method_and_params_of_json = function
   | `List [`String method_; `Assoc params] -> method_, `Assoc params
   | _ -> failwith "unreachable"
 
-let json_of_method_and_params ~method_ ~params =
+let json_of_method_and_params ~method_ ~(params : Yojson.Safe.t option) :
+    Yojson.Safe.t =
   `List (`String method_ :: Option.to_list params)
+
+module GameToPlayerRequest = struct
+  module Attack = struct
+    module Bandit = struct
+      type t = Card.t list [@@deriving yojson_of]
+    end
+  end
+end
+
+module PlayerToGameResponse = struct
+  module Attack = struct
+    type t = {
+      reaction : Card.t option; [@yojson.option]
+      data : data option; [@yojson.option]
+    }
+    [@@deriving of_yojson]
+
+    module Bureaucrat = struct
+      type t =
+        | Reveal
+        | VictoryCard of Card.t
+
+      let t_of_yojson : data -> t = function
+        | `String "reveal" -> Reveal
+        | card -> VictoryCard (Card.t_of_yojson card)
+    end
+    module Militia = struct
+      type t = Card.t list [@@deriving of_yojson]
+    end
+    module Bandit = struct
+      type t = Card.t option [@@deriving of_yojson]
+    end
+  end
+  module Harbinger = struct
+    type t = { card : Card.t } [@@deriving of_yojson]
+  end
+  module Vassal = struct
+    type t = {
+      play : bool;
+      data : data;
+    }
+    [@@deriving of_yojson]
+  end
+  module Poacher = struct
+    type t = { discard : Card.t list } [@@deriving of_yojson]
+  end
+  module ThroneRoom = struct
+    type t = { data : data } [@@deriving of_yojson]
+  end
+  module Library = struct
+    type t = { skip : bool } [@@deriving of_yojson]
+  end
+  module Sentry = struct
+    type placement =
+      | Trash
+      | Discard
+      | Topdeck
+    let placement_of_yojson = function
+      | `String "trash" -> Trash
+      | `String "discard" -> Discard
+      | `String "topdeck" -> Topdeck
+      | json ->
+        let e =
+          Failure "`do` must be one of \"trash\", \"discard\", or \"topdeck\"."
+        in
+        raise (Ppx_yojson_conv_lib.Yojson_conv.Of_yojson_error (e, json))
+
+    type card_placement = {
+      card : Card.t;
+      placement : placement;
+    }
+    [@@deriving of_yojson]
+
+    type t = card_placement list [@@deriving of_yojson]
+  end
+end
