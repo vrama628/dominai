@@ -230,7 +230,7 @@ Request:
 }
 Response:
 {
-    hand: [Card];
+    hand: Card[];
     discard: number;
     deck: number;
     supply: { [Card]: number; };
