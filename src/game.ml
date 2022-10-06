@@ -499,8 +499,15 @@ module Player = struct
         |> Dream.send websocket
     )
 
-  let notify { websocket; _ } (notification : game_to_player_notification) :
-      unit =
+  let notify { websocket; name; _ } (notification : game_to_player_notification)
+      : unit =
+    Dream.log
+      "Player %s: Notifying %s"
+      name
+      (notification
+      |> yojson_of_game_to_player_notification
+      |> Yojson.Safe.to_string
+      );
     notify_websocket ~websocket notification
 
   let disconnect_resolver ~(resolver : unit Lwt.u) = Lwt.wakeup resolver ()
@@ -517,7 +524,11 @@ module Player = struct
 
   let fatal_error
       (error : Jsonrpc.Response.Error.t)
-      ({ websocket; resolver; _ } : t) : unit =
+      ({ websocket; resolver; name; _ } : t) : unit =
+    Dream.log
+      "Player %s Fatal Error: %s"
+      name
+      (error |> Jsonrpc.Response.Error.yojson_of_t |> Yojson.Safe.to_string);
     let Jsonrpc.Response.Error.{ message; _ } = error in
     fatal_error_message ~message ~websocket ~resolver
 
@@ -560,16 +571,15 @@ module Player = struct
                 let response =
                   match result with
                   | Ok json -> Jsonrpc.Response.ok id json
-                  | Error error ->
-                    Dream.log
-                      "Player %s error: %s"
-                      name
-                      (error
-                      |> Jsonrpc.Response.Error.yojson_of_t
-                      |> Yojson.Safe.to_string
-                      );
-                    Jsonrpc.Response.error id error
+                  | Error error -> Jsonrpc.Response.error id error
                 in
+                Dream.log
+                  "Player %s Response %s: %s"
+                  name
+                  (Jsonrpc.Id.yojson_of_t id |> Yojson.Safe.to_string)
+                  (Jsonrpc.Response.yojson_of_t response
+                  |> Yojson.Safe.to_string
+                  );
                 response
                 |> Jsonrpc.Response.yojson_of_t
                 |> Yojson.Safe.to_string
@@ -650,8 +660,12 @@ module Player = struct
       Ref.replace counter (( + ) 1);
       !counter
 
-  let request { websocket; pending; _ } (request : game_to_player_request) :
-      Yojson.Safe.t Lwt.t =
+  let request { websocket; pending; name; _ } (request : game_to_player_request)
+      : Yojson.Safe.t Lwt.t =
+    Dream.log
+      "Player %s: Notifying %s"
+      name
+      (request |> yojson_of_game_to_player_request |> Yojson.Safe.to_string);
     let method_, params =
       request |> yojson_of_game_to_player_request |> method_and_params_of_json
     in
@@ -883,6 +897,8 @@ let start_turn
     ~(trash : Card.t list)
     ~(player : Player.t)
     ~(next_players : Player.t list) : unit Lwt.t =
+  Dream.log "Player %s starting turn" player.name;
+  Player.log player;
   let current_player =
     let turn_status = TurnStatus.initial in
     CurrentPlayer.{ player; turn_status }
