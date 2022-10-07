@@ -473,6 +473,8 @@ module Player = struct
     cards : Cards.t;
   }
 
+  let reset (player : t) = { player with cards = Cards.create () }
+
   let log { name; cards; pending; _ } : unit =
     Dream.log
       "Player %s: Cards=%s, pending=%s"
@@ -1019,6 +1021,7 @@ let game_over ~game ~kingdom_selection ~(players : Player.t list) : unit Lwt.t =
         match response with Ok true -> true | _ -> false
     )
   then
+    let players = List.map players ~f:Player.reset in
     start_game ~game ~kingdom_selection ~players
   else (
     List.iter players ~f:(fun player -> Player.disconnect player);
