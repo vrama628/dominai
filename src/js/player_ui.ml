@@ -49,31 +49,17 @@ module Connection = struct
     { event; send }
 end
 
-type supply = (Card.t * int) list
-let supply_of_yojson (json : Yojson.Safe.t) : supply =
-  json
-  |> Yojson.Safe.Util.to_assoc
-  |> List.map ~f:(fun (card, amount) ->
-         Card.t_of_yojson (`String card), Yojson.Safe.Util.to_int amount
-     )
-
 type turn =
-  | YourTurn
-  | OtherTurn
+  | YourTurn of Api.turn_info
+  | NotYourTurn
 
 type game_state =
   | PreStart
   | InPlay of {
       kingdom : Card.t list;
-      supply : supply;
+      order : string list;
       turn : turn;
     }
-
-let () =
-  ignore YourTurn;
-  ignore OtherTurn;
-  ignore supply_of_yojson;
-  ignore (InPlay { kingdom = []; supply = []; turn = OtherTurn })
 
 type app_state =
   | PreJoin
@@ -83,12 +69,85 @@ let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create PreJoin
 
-let handle_notification : Api.game_to_player_notification -> unit = function
-  | _ -> ()
+let handle_notification (notification : Api.game_to_player_notification) : unit
+    =
+  match notification, S.value state_s with
+  | Api.StartTurn turn_info, Connected (InPlay in_play) ->
+    set_state (Connected (InPlay { in_play with turn = YourTurn turn_info }))
+  | _ -> failwith "invalid state"
 
-let handle_request : Api.game_to_player_request -> Yojson.Safe.t Lwt.t =
+let handle_request (request : Api.game_to_player_request) : Yojson.Safe.t Lwt.t
+    =
+  match request, S.value state_s with
+  | Api.StartGame { kingdom; order }, Connected PreStart ->
+    set_state (Connected (InPlay { kingdom; order; turn = NotYourTurn }));
+    Lwt.return (`Assoc [])
+  | _ -> failwith "invalid state"
+
+let render_turn : turn -> Html_types.div Html.elt =
+  let open Html in
   function
-  | _ -> failwith "TODO"
+  | NotYourTurn -> div [txt "It is not currently your turn."]
+  | YourTurn
+      Api.
+        {
+          hand : Card.t list;
+          discard : int;
+          deck : int;
+          supply : Supply.t;
+          trash : Trash.t;
+          buys : int;
+          actions : int;
+          treasure : int;
+          in_play : Card.t list;
+          phase : turn_phase;
+        } ->
+    ignore (trash, in_play, phase);
+    div
+      [
+        div [txt "It is your turn."];
+        div
+          ~a:[a_class ["d-flex"]]
+          (txt "Supply:"
+          :: List.map (supply |> Map.to_alist) ~f:(fun (card, amount) ->
+                 div
+                   ~a:[a_class ["bg-light"]]
+                   [
+                     txt (Card.to_string card);
+                     txt " : ";
+                     txt (Int.to_string amount);
+                   ]
+             )
+          );
+        div
+          [
+            txt
+              (Printf.sprintf
+                 "Hand: %s"
+                 (List.map ~f:Card.to_string hand |> String.concat ~sep:", ")
+              );
+          ];
+        div
+          [
+            txt
+              (Printf.sprintf
+                 "Cards in deck: %d. Cards in discard: %d."
+                 deck
+                 discard
+              );
+          ];
+        div
+          [
+            txt
+              (Printf.sprintf
+                 "You currently have remaining: %d actions, %d buys, and %d \
+                  treasure."
+                 actions
+                 buys
+                 treasure
+              );
+          ];
+      ]
 
 let game_state_app ~(game_key : string) ~(default_name : string) :
     Html_types.div Html.elt =
@@ -164,32 +223,25 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
             [txt "Join Game"];
         ]
     | Connected PreStart -> div [txt "Waiting for game to start ..."]
-    | Connected (InPlay { supply; turn; kingdom = _ }) ->
+    | Connected (InPlay { kingdom; order; turn }) ->
       div
         [
           div
             [
-              txt "Supply:";
-              div
-                ~a:[a_class ["d-flex"]]
-                (List.map supply ~f:(fun (card, amount) ->
-                     div
-                       [
-                         txt (Card.to_string card);
-                         txt ": ";
-                         txt (Int.to_string amount);
-                       ]
-                 )
+              txt
+                (Printf.sprintf
+                   "Kingdom: %s"
+                   (List.map ~f:Card.to_string kingdom
+                   |> String.concat ~sep:", "
+                   )
                 );
             ];
           div
             [
               txt
-                ( match turn with
-                | YourTurn -> "your turn"
-                | OtherTurn -> "not your turn"
-                );
+                (Printf.sprintf "Turn order: %s" (String.concat ~sep:", " order));
             ];
+          render_turn turn;
         ]
   in
   R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
