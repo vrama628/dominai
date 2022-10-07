@@ -828,12 +828,14 @@ open CurrentPlayer
 type kingdom_selection =
   | FirstGame
   | DeckTop
+  | SleightOfHand
   | Random
 [@@deriving yojson_of]
 
 let kingdom_selection_of_string = function
   | "first_game" -> FirstGame
   | "deck_top" -> DeckTop
+  | "sleight_of_hand" -> SleightOfHand
   | "random" -> Random
   | other ->
     Dream.log "Invalid kingdom selection %s" other;
@@ -963,6 +965,20 @@ let start_game
           Sentry;
           Vassal;
           Village;
+        ]
+    | SleightOfHand ->
+      Card.
+        [
+          Cellar;
+          CouncilRoom;
+          Festival;
+          Gardens;
+          Library;
+          Harbinger;
+          Militia;
+          Poacher;
+          Smithy;
+          ThroneRoom;
         ]
     | Random -> List.take (shuffle randomizer_cards) 10
   in
