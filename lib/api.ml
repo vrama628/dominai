@@ -12,7 +12,7 @@ type player_to_game_request =
       data : data;
     }
   | Buy of { card : Card.t }
-[@@deriving of_yojson]
+[@@deriving yojson]
 
 type turn_phase =
   | Action
@@ -95,6 +95,24 @@ module GameToPlayerRequest = struct
     module Bandit = struct
       type t = Card.t list [@@deriving yojson_of]
     end
+  end
+end
+
+module GameToPlayerResponse = struct
+  module EndTurn = struct
+    type t = {
+      hand : Card.t list;
+      discard : int;
+      deck : int;
+      supply : Supply.t;
+    }
+    [@@deriving yojson_of]
+  end
+  module Play = struct
+    type t = turn_info [@@deriving yojson_of]
+  end
+  module Buy = struct
+    type t = turn_info [@@deriving yojson_of]
   end
 end
 

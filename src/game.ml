@@ -540,15 +540,8 @@ let game_over ~(players : Player.t list) : unit =
       Player.disconnect player
   )
 
-type end_turn_response = {
-  hand : Card.t list;
-  discard : int;
-  deck : int;
-  supply : Supply.t;
-}
-[@@deriving yojson_of]
-
-let end_turn ~(game : t) ~(name : string) : end_turn_response Errorable.t =
+let end_turn ~(game : t) ~(name : string) :
+    GameToPlayerResponse.EndTurn.t Errorable.t =
   match React.S.value game.state with
   | Turn
       {
@@ -565,7 +558,7 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response Errorable.t =
       let hand = Player.get_hand prev_player in
       let discard = Player.get_discard prev_player in
       let deck = Player.get_deck prev_player in
-      { hand; discard; deck; supply }
+      GameToPlayerResponse.EndTurn.{ hand; discard; deck; supply }
     in
     let next_players = next_players @ [prev_player] in
     if Supply.game_is_over supply then
@@ -609,8 +602,6 @@ let react ~(player : Player.t) ~(card : Card.t) : unit Errorable.t =
     error
       "Cannot react with %s; it is not a reaction card."
       (Card.to_string card)
-
-type play_response = turn_info [@@deriving yojson_of]
 
 let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     turn Errorable.t =
@@ -1240,7 +1231,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     return { turn with current_player = { turn_status; player }; supply }
 
 let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
-    play_response Errorable.t =
+    GameToPlayerResponse.Play.t Errorable.t =
   match React.S.value game.state with
   | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
     let%bind turn = play_card ~turn ~card ~data in
@@ -1254,7 +1245,8 @@ let play ~(game : t) ~(card : Card.t) ~(data : data) ~(name : string) :
   | _ -> error "It is not your turn."
 
 (* TODO: don't allow playing treasures after buying *)
-let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info Errorable.t =
+let buy ~(game : t) ~(card : Card.t) ~(name : string) :
+    GameToPlayerResponse.Buy.t Errorable.t =
   match React.S.value game.state with
   | Turn turn when String.equal (CurrentPlayer.name turn.current_player) name ->
     let%bind supply = Supply.take card turn.supply in
@@ -1335,12 +1327,13 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
       let handler = function
         | EndTurn () ->
           end_turn ~game ~name
-          |> Lwt.map (Result.map ~f:yojson_of_end_turn_response)
+          |> Lwt.map (Result.map ~f:GameToPlayerResponse.EndTurn.yojson_of_t)
         | Play { card; data } ->
           play ~game ~card ~data ~name
-          |> Lwt.map (Result.map ~f:yojson_of_play_response)
+          |> Lwt.map (Result.map ~f:GameToPlayerResponse.Play.yojson_of_t)
         | Buy { card } ->
-          buy ~game ~card ~name |> Lwt.map (Result.map ~f:yojson_of_turn_info)
+          buy ~game ~card ~name
+          |> Lwt.map (Result.map ~f:GameToPlayerResponse.Buy.yojson_of_t)
       in
       let on_disconnect () = on_disconnect ~game ~name in
       let promise, player =

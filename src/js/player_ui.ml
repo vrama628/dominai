@@ -49,6 +49,38 @@ module Connection = struct
     { event; send }
 end
 
+module Requests = struct
+  let fresh_id =
+    let counter = ref 0 in
+    fun () ->
+      Ref.replace counter (( + ) 1);
+      !counter
+
+  let pending = Hashtbl.create (module Int)
+
+  let request ~(connection : Connection.t) (request : Api.player_to_game_request)
+      : (Yojson.Safe.t, Jsonrpc.Response.Error.t) Result.t Lwt.t =
+    let promise, resolver = Lwt.wait () in
+    let method_, params =
+      request
+      |> Api.yojson_of_player_to_game_request
+      |> Api.method_and_params_of_json
+    in
+    let key = fresh_id () in
+    Hashtbl.add_exn pending ~key ~data:resolver;
+    let id = `Int key in
+    connection.send
+      (Jsonrpc.Packet.Request (Jsonrpc.Request.create ~id ~method_ ~params ()));
+    promise
+
+  let response Jsonrpc.Response.{ id; result } : unit =
+    let key =
+      match id with `Int key -> key | _ -> failwith "invalid response id"
+    in
+    let resolver = Hashtbl.find_exn pending key in
+    Lwt.wakeup_later resolver result
+end
+
 type turn =
   | YourTurn of Api.turn_info
   | NotYourTurn
