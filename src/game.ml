@@ -1102,9 +1102,9 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let player = Player.draw_n 1 current_player.player in
     let turn_status = TurnStatus.add_actions 1 turn_status in
     let Player.Cards.{ discard; _ } = player.cards in
-    let%bind discard =
+    let%bind player =
       if List.is_empty discard then
-        return discard
+        return player
       else
         let%lwt response = Player.request player (Harbinger { discard }) in
         let%bind PlayerToGameResponse.Harbinger.{ card } =
@@ -1112,10 +1112,10 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
         in
         match find_and_remove card discard with
         | None -> error "Card %s not in discard pile." (Card.to_string card)
-        | Some discard -> return discard
+        | Some discard ->
+          let player = { player with cards = { player.cards with discard } } in
+          return (Player.topdeck card player)
     in
-    let player = { player with cards = { player.cards with discard } } in
-    let player = Player.topdeck card player in
     let current_player = { player; turn_status } in
     return { turn with current_player }
   | Card.Merchant ->
