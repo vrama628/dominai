@@ -26,12 +26,14 @@ type turn = {
 type kingdom_selection =
   | FirstGame
   | DeckTop
+  | SleightOfHand
   | Random
 [@@deriving of_yojson]
 
 let string_of_kingdom_selection = function
   | FirstGame -> "First Game"
   | DeckTop -> "Deck Top"
+  | SleightOfHand -> "Sleight of Hand"
   | Random -> "Random"
 
 type state =
