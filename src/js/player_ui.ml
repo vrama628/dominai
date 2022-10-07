@@ -92,6 +92,10 @@ type game_state =
       order : string list;
       turn : turn;
     }
+  | GameOver of {
+      result : Api.game_over_result;
+      scores : Scores.t;
+    }
 
 type app_state =
   | PreJoin
@@ -106,6 +110,7 @@ let handle_notification (notification : Api.game_to_player_notification) : unit
   match notification, S.value state_s with
   | Api.StartTurn turn_info, Connected (InPlay in_play) ->
     set_state (Connected (InPlay { in_play with turn = YourTurn turn_info }))
+  | Api.FatalError { message }, _ -> Firebug.console##log message
   | _ -> failwith "invalid state"
 
 let handle_request (request : Api.game_to_player_request) : Yojson.Safe.t Lwt.t
@@ -274,6 +279,28 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
                 (Printf.sprintf "Turn order: %s" (String.concat ~sep:", " order));
             ];
           render_turn turn;
+        ]
+    | Connected (GameOver { result; scores }) ->
+      div
+        [
+          div [txt "Game over."];
+          div
+            [
+              txt
+                ( match result with
+                | Api.Win -> "You win!"
+                | Api.Lose -> "You lose."
+                );
+            ];
+          div
+            [
+              txt "Final scores:";
+              ul
+                (List.map scores ~f:(fun (name, score) ->
+                     li [Printf.ksprintf txt "%s: %d" name score]
+                 )
+                );
+            ];
         ]
   in
   R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
