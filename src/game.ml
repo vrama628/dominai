@@ -1530,10 +1530,10 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     return { turn with current_player = { turn_status; player } }
   | Card.Library ->
     let rec draw_until_7 (player : Player.t) : Player.t errorable =
-      if List.length (Player.get_hand current_player.player) >= 7 then
+      if List.length (Player.get_hand player) >= 7 then
         return player
       else
-        match Player.take_from_deck current_player.player with
+        match Player.take_from_deck player with
         | None -> return player
         | Some (card, player) ->
           if Card.is_action card then
