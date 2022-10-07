@@ -27,6 +27,7 @@ type kingdom_selection =
   | FirstGame
   | DeckTop
   | SleightOfHand
+  | Engines
   | Random
 [@@deriving of_yojson]
 
@@ -34,6 +35,7 @@ let string_of_kingdom_selection = function
   | FirstGame -> "First Game"
   | DeckTop -> "Deck Top"
   | SleightOfHand -> "Sleight of Hand"
+  | Engines -> "Engines"
   | Random -> "Random"
 
 type state =

@@ -106,6 +106,7 @@ let index (_ : Dream.request) : Dream.response Lwt.t =
                 option ~a:[a_value "first_game"] (txt "First Game");
                 option ~a:[a_value "deck_top"] (txt "Deck Top");
                 option ~a:[a_value "sleight_of_hand"] (txt "Sleight of Hand");
+                option ~a:[a_value "engines"] (txt "Engines");
                 option ~a:[a_value "random"] (txt "Random");
               ];
           ];
