@@ -225,10 +225,6 @@ let yojson_of_scores (scores : scores) : Yojson.Safe.t =
 type game_to_player_notification =
   | StartTurn of turn_info
   | FatalError of { message : string }
-  | GameOver of {
-      result : game_over_result;
-      scores : scores;
-    }
 [@@deriving yojson_of]
 
 (* TODO: move into module *)
@@ -255,6 +251,10 @@ type game_to_player_request =
   | Sentry of {
       hand : Card.t list;
       cards : Card.t list;
+    }
+  | GameOver of {
+      result : game_over_result;
+      scores : scores;
     }
 [@@deriving yojson_of]
 
@@ -331,6 +331,9 @@ module PlayerToGameResponse = struct
     [@@deriving of_yojson]
 
     type t = card_placement list [@@deriving of_yojson]
+  end
+  module GameOver = struct
+    type t = { rematch : bool } [@@deriving of_yojson]
   end
 end
 
@@ -820,15 +823,6 @@ module CurrentPlayer = struct
 end
 open CurrentPlayer
 
-type turn = {
-  kingdom : Card.t list;
-  supply : Supply.t;
-  trash : Card.t list;
-  current_player : CurrentPlayer.t;
-  next_players : Player.t list;
-}
-[@@deriving yojson_of]
-
 type kingdom_selection =
   | FirstGame
   | DeckTop
@@ -842,6 +836,16 @@ let kingdom_selection_of_string = function
   | other ->
     Dream.log "Invalid kingdom selection %s" other;
     failwith "Invalid kingdom selection"
+
+type turn = {
+  kingdom : Card.t list;
+  supply : Supply.t;
+  trash : Card.t list;
+  current_player : CurrentPlayer.t;
+  next_players : Player.t list;
+  kingdom_selection : kingdom_selection;
+}
+[@@deriving yojson_of]
 
 type state =
   | PreStart of {
@@ -896,86 +900,29 @@ let start_turn
     ~(supply : Supply.t)
     ~(trash : Card.t list)
     ~(player : Player.t)
-    ~(next_players : Player.t list) : unit Lwt.t =
+    ~(next_players : Player.t list)
+    ~(kingdom_selection : kingdom_selection) : unit Lwt.t =
   Dream.log "Player %s starting turn" player.name;
   Player.log player;
   let current_player =
     let turn_status = TurnStatus.initial in
     CurrentPlayer.{ player; turn_status }
   in
-  game.set (Turn { kingdom; supply; trash; current_player; next_players });
+  game.set
+    (Turn
+       {
+         kingdom;
+         supply;
+         trash;
+         current_player;
+         next_players;
+         kingdom_selection;
+       }
+    );
   Player.notify
     player
     (StartTurn (CurrentPlayer.turn_info current_player ~supply ~trash));
   Lwt.return_unit
-
-let game_over ~(players : Player.t list) : unit =
-  let scores =
-    List.map players ~f:(fun player ->
-        Player.name player, Player.victory_points player
-    )
-  in
-  let highest_score =
-    scores
-    |> List.map ~f:snd
-    |> List.max_elt ~compare:Int.compare
-    |> Option.value_exn
-  in
-  List.iter players ~f:(fun player ->
-      let result =
-        if Player.victory_points player = highest_score then
-          Win
-        else
-          Lose
-      in
-      Player.notify player (GameOver { scores; result });
-      Player.disconnect player
-  )
-
-type end_turn_response = {
-  hand : Card.t list;
-  discard : int;
-  deck : int;
-  supply : Supply.t;
-}
-[@@deriving yojson_of]
-
-let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
-  match React.S.value game.state with
-  | Turn
-      {
-        current_player;
-        next_players = next_player :: next_players;
-        kingdom;
-        supply;
-        trash;
-        _;
-      }
-    when String.equal (CurrentPlayer.name current_player) name ->
-    let prev_player = CurrentPlayer.clean_up current_player in
-    Dream.log "Player %s just ended their turn" name;
-    Player.log prev_player;
-    let end_turn_response =
-      let hand = Player.get_hand prev_player in
-      let discard = Player.get_discard prev_player in
-      let deck = Player.get_deck prev_player in
-      { hand; discard; deck; supply }
-    in
-    let next_players = next_players @ [prev_player] in
-    if Supply.game_is_over supply then
-      game_over ~players:(next_player :: next_players)
-    else
-      Lwt.async (fun () ->
-          start_turn
-            ~game
-            ~kingdom
-            ~supply
-            ~trash
-            ~player:next_player
-            ~next_players
-      );
-    Lwt.return (Ok end_turn_response)
-  | _ -> error "It is not your turn."
 
 (* PRECONDITION: between 2 and 4 players *)
 let start_game
@@ -1027,7 +974,108 @@ let start_game
        )
       )
   in
-  start_turn ~game ~kingdom ~supply ~trash ~player ~next_players
+  start_turn
+    ~game
+    ~kingdom
+    ~supply
+    ~trash
+    ~player
+    ~next_players
+    ~kingdom_selection
+
+let game_over ~game ~kingdom_selection ~(players : Player.t list) : unit Lwt.t =
+  let scores =
+    List.map players ~f:(fun player ->
+        Player.name player, Player.victory_points player
+    )
+  in
+  let highest_score =
+    scores
+    |> List.map ~f:snd
+    |> List.max_elt ~compare:Int.compare
+    |> Option.value_exn
+  in
+  let%lwt responses =
+    Lwt.all
+      (List.map players ~f:(fun player ->
+           let result =
+             if Player.victory_points player = highest_score then
+               Win
+             else
+               Lose
+           in
+           let%lwt response =
+             Player.request player (GameOver { scores; result })
+           in
+           let%bind PlayerToGameResponse.GameOver.{ rematch } =
+             parse PlayerToGameResponse.GameOver.t_of_yojson response
+           in
+           return rematch
+       )
+      )
+  in
+  if
+    List.for_all responses ~f:(fun response ->
+        match response with Ok true -> true | _ -> false
+    )
+  then
+    start_game ~game ~kingdom_selection ~players
+  else (
+    List.iter players ~f:(fun player -> Player.disconnect player);
+    Lwt.return_unit
+  )
+
+type end_turn_response = {
+  hand : Card.t list;
+  discard : int;
+  deck : int;
+  supply : Supply.t;
+}
+[@@deriving yojson_of]
+
+let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
+  match React.S.value game.state with
+  | Turn
+      {
+        current_player;
+        next_players = next_player :: next_players;
+        kingdom;
+        supply;
+        trash;
+        kingdom_selection;
+        _;
+      }
+    when String.equal (CurrentPlayer.name current_player) name ->
+    let prev_player = CurrentPlayer.clean_up current_player in
+    Dream.log "Player %s just ended their turn" name;
+    Player.log prev_player;
+    let end_turn_response =
+      let hand = Player.get_hand prev_player in
+      let discard = Player.get_discard prev_player in
+      let deck = Player.get_deck prev_player in
+      { hand; discard; deck; supply }
+    in
+    let next_players = next_players @ [prev_player] in
+    if Supply.game_is_over supply then
+      Lwt.async (fun () ->
+          game_over
+            ~kingdom_selection
+            ~game
+            ~players:(next_player :: next_players)
+      )
+    else
+      Lwt.async (fun () ->
+          start_turn
+            ~game
+            ~kingdom
+            ~supply
+            ~trash
+            ~player:next_player
+            ~next_players
+            ~kingdom_selection
+      );
+    Lwt.return (Ok end_turn_response)
+  | _ -> error "It is not your turn."
 
 let react ~(player : Player.t) ~(card : Card.t) : unit errorable =
   if Card.is_reaction card then
@@ -1739,6 +1787,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
                 ~trash:turn.trash
                 ~player
                 ~next_players
+                ~kingdom_selection:Random
           );
           Turn turn
       ) else
