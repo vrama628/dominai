@@ -1,9 +1,6 @@
 open Js_of_ocaml
-
-(* open Js_of_ocaml_lwt *)
 open Js_of_ocaml_tyxml.Tyxml_js
 open React
-
 open ReactiveData
 open Base
 open Dominai
@@ -100,9 +97,6 @@ type game_state =
     }
 [@@deriving eq]
 
-let () =
-  ignore Requests.(request, response, GameOver { result = Api.Win; scores = [] })
-
 type app_state =
   | PreJoin
   | Connected of {
@@ -135,17 +129,14 @@ let handle_notification (notification : Api.game_to_player_notification) : unit
 let handle_request (request : Api.game_to_player_request) : Yojson.Safe.t Lwt.t
     =
   match request, S.value state_s with
-  | ( Api.StartGame { kingdom; order },
-      Connected { name; connection; game_state = PreStart } ) ->
-    set_state
-      (Connected
-         {
-           name;
-           connection;
-           game_state = InPlay { kingdom; order; turn = NotYourTurn };
-         }
-      );
+  | Api.StartGame { kingdom; order }, Connected connected ->
+    let game_state = InPlay { kingdom; order; turn = NotYourTurn } in
+    set_state (Connected { connected with game_state });
     Lwt.return (`Assoc [])
+  | Api.GameOver { result; scores }, Connected connected ->
+    let game_state = GameOver { result; scores } in
+    set_state (Connected { connected with game_state });
+    Lwt.return (`Assoc ["rematch", `Bool false])
   | _ -> failwith "invalid state"
 
 let play_data_app () : Html_types.div Html.elt * (Card.t -> Yojson.Safe.t Lwt.t)
