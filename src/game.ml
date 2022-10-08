@@ -156,7 +156,7 @@ module Player = struct
       |> method_and_params_of_json
     in
     Lwt.async (fun () ->
-        Jsonrpc.Notification.create ~method_ ~params ()
+        Jsonrpc.Notification.create ~method_ ?params ()
         |> Jsonrpc.Notification.yojson_of_t
         |> Yojson.Safe.to_string
         |> Dream.send websocket
@@ -339,7 +339,7 @@ module Player = struct
       `Int key
     in
     Lwt.async (fun () ->
-        Jsonrpc.Request.create ~id ~method_ ~params ()
+        Jsonrpc.Request.create ~id ~method_ ?params ()
         |> Jsonrpc.Request.yojson_of_t
         |> Yojson.Safe.to_string
         |> Dream.send websocket
@@ -1529,7 +1529,7 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
          e.g. issuing EndTurn while a Play is in progress can let a player
          revert to a prior point in time later on in the game *)
       let handler = function
-        | EndTurn () ->
+        | EndTurn ->
           end_turn ~game ~name
           |> Lwt.map (Result.map ~f:GameToPlayerResponse.EndTurn.yojson_of_t)
         | Play { card; data } ->

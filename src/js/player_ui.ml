@@ -68,7 +68,7 @@ module Requests = struct
     Hashtbl.add_exn pending ~key ~data:resolver;
     let id = `Int key in
     connection.send
-      (Jsonrpc.Packet.Request (Jsonrpc.Request.create ~id ~method_ ~params ()));
+      (Jsonrpc.Packet.Request (Jsonrpc.Request.create ~id ~method_ ?params ()));
     promise
 
   let response Jsonrpc.Response.{ id; result } : unit =
@@ -121,6 +121,21 @@ let update_turn_info (turn_info : Api.turn_info) : unit =
          {
            connected with
            game_state = InPlay { in_play with turn = YourTurn turn_info };
+         }
+      )
+  | _ -> ()
+
+let set_state_end_turn () : unit =
+  match S.value state_s with
+  | Connected
+      ( { game_state = InPlay ({ turn = YourTurn _; _ } as in_play); _ } as
+      connected
+      ) ->
+    set_state
+      (Connected
+         {
+           connected with
+           game_state = InPlay { in_play with turn = NotYourTurn };
          }
       )
   | _ -> ()
@@ -226,6 +241,19 @@ let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
     );
     false
   in
+  let end_turn _ =
+    Lwt.async (fun () ->
+        let%lwt response = Requests.request ~connection Api.EndTurn in
+        ( match response with
+        | Error err -> add_error err.Jsonrpc.Response.Error.message
+        | Ok json ->
+          ignore json;
+          set_state_end_turn ()
+        );
+        Lwt.return_unit
+    );
+    false
+  in
   function
   | NotYourTurn -> div [txt "It is not currently your turn."]
   | YourTurn
@@ -324,6 +352,14 @@ let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
                )
               );
           ];
+        button
+          ~a:
+            [
+              a_button_type `Button;
+              a_class ["btn"; "btn-primary"; "btn-lg"; "m-2"];
+              a_onclick end_turn;
+            ]
+          [txt "End Turn"];
       ]
 
 let game_state_app ~(game_key : string) ~(default_name : string) :

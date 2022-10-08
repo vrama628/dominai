@@ -10,7 +10,7 @@ type game_over_result =
 [@@deriving yojson, eq]
 
 type player_to_game_request =
-  | EndTurn of unit
+  | EndTurn
   | Play of {
       card : Card.t;
       (* TODO: move data entirely to separate requests *)
@@ -83,7 +83,8 @@ type game_to_player_request =
 [@@deriving yojson]
 
 let method_and_params_of_json = function
-  | `List [`String method_; `Assoc params] -> method_, `Assoc params
+  | `List [`String method_; `Assoc params] -> method_, Some (`Assoc params)
+  | `List [`String method_] -> method_, None
   | _ -> failwith "unreachable"
 
 let json_of_method_and_params ~method_ ~(params : Yojson.Safe.t option) :
