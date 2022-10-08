@@ -3,49 +3,6 @@ open Dominai
 open Api
 open Errorable
 
-module Play = struct
-  module Cellar = struct
-    type t = Card.t list [@@deriving of_yojson]
-  end
-  module Chapel = struct
-    type t = Card.t list [@@deriving of_yojson]
-  end
-  module Workshop = struct
-    type t = Card.t [@@deriving of_yojson]
-  end
-  module Moneylender = struct
-    type t = bool [@@deriving of_yojson]
-  end
-  module Remodel = struct
-    type t = {
-      trash : Card.t;
-      gain : Card.t;
-    }
-    [@@deriving of_yojson]
-  end
-  module ThroneRoom = struct
-    type t = {
-      card : Card.t;
-      data : data;
-    }
-    [@@deriving of_yojson]
-  end
-  module Mine = struct
-    type t = {
-      trash : Card.t;
-      gain : Card.t;
-    }
-    [@@deriving of_yojson]
-  end
-  module Artisan = struct
-    type t = {
-      gain : Card.t;
-      topdeck : Card.t;
-    }
-    [@@deriving of_yojson]
-  end
-end
-
 let parse (t_of_yojson : Yojson.Safe.t -> 'a) (data : Yojson.Safe.t) :
     'a Errorable.t =
   try return (t_of_yojson data)

@@ -7,7 +7,7 @@ let yojson_of_data = Fn.id
 type game_over_result =
   | Win
   | Lose
-[@@deriving yojson]
+[@@deriving yojson, eq]
 
 type player_to_game_request =
   | EndTurn of unit
@@ -22,7 +22,7 @@ type player_to_game_request =
 type turn_phase =
   | Action
   | Buy
-[@@deriving yojson]
+[@@deriving yojson, eq]
 
 type turn_info = {
   hand : Card.t list;
@@ -36,7 +36,7 @@ type turn_info = {
   in_play : Card.t list;
   phase : turn_phase;
 }
-[@@deriving yojson]
+[@@deriving yojson, eq]
 
 let yojson_of_game_over_result (game_over_result : game_over_result) :
     Yojson.Safe.t =
@@ -184,5 +184,48 @@ module PlayerToGameResponse = struct
   end
   module GameOver = struct
     type t = { rematch : bool } [@@deriving of_yojson]
+  end
+end
+
+module Play = struct
+  module Cellar = struct
+    type t = Card.t list [@@deriving of_yojson]
+  end
+  module Chapel = struct
+    type t = Card.t list [@@deriving of_yojson]
+  end
+  module Workshop = struct
+    type t = Card.t [@@deriving of_yojson]
+  end
+  module Moneylender = struct
+    type t = bool [@@deriving of_yojson]
+  end
+  module Remodel = struct
+    type t = {
+      trash : Card.t;
+      gain : Card.t;
+    }
+    [@@deriving of_yojson]
+  end
+  module ThroneRoom = struct
+    type t = {
+      card : Card.t;
+      data : data;
+    }
+    [@@deriving of_yojson]
+  end
+  module Mine = struct
+    type t = {
+      trash : Card.t;
+      gain : Card.t;
+    }
+    [@@deriving of_yojson]
+  end
+  module Artisan = struct
+    type t = {
+      gain : Card.t;
+      topdeck : Card.t;
+    }
+    [@@deriving of_yojson]
   end
 end

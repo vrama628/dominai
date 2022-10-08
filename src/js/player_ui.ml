@@ -4,7 +4,7 @@ open Js_of_ocaml
 open Js_of_ocaml_tyxml.Tyxml_js
 open React
 
-(* open ReactiveData *)
+open ReactiveData
 open Base
 open Dominai
 
@@ -13,6 +13,8 @@ module Connection = struct
     event : Jsonrpc.Packet.t event;
     send : Jsonrpc.Packet.t -> unit;
   }
+
+  let equal : t -> t -> bool = phys_equal
 
   let connect ~(game_key : string) ~(name : string) : t =
     let websocket_js =
@@ -24,7 +26,6 @@ module Connection = struct
           game_key
           name
       in
-      Firebug.console##log url;
       new%js WebSockets.webSocket (Js.string url)
     in
     let event, trigger = E.create () in
@@ -84,6 +85,7 @@ end
 type turn =
   | YourTurn of Api.turn_info
   | NotYourTurn
+[@@deriving eq]
 
 type game_state =
   | PreStart
@@ -96,36 +98,103 @@ type game_state =
       result : Api.game_over_result;
       scores : Scores.t;
     }
+[@@deriving eq]
 
 let () =
   ignore Requests.(request, response, GameOver { result = Api.Win; scores = [] })
 
 type app_state =
   | PreJoin
-  | Connected of game_state
+  | Connected of {
+      name : string;
+      connection : Connection.t;
+      game_state : game_state;
+    }
+[@@deriving eq]
 
 let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
-  S.create PreJoin
+  S.create ~eq:equal_app_state PreJoin
 
 let handle_notification (notification : Api.game_to_player_notification) : unit
     =
   match notification, S.value state_s with
-  | Api.StartTurn turn_info, Connected (InPlay in_play) ->
-    set_state (Connected (InPlay { in_play with turn = YourTurn turn_info }))
+  | ( Api.StartTurn turn_info,
+      Connected { name; connection; game_state = InPlay in_play } ) ->
+    set_state
+      (Connected
+         {
+           name;
+           connection;
+           game_state = InPlay { in_play with turn = YourTurn turn_info };
+         }
+      )
   | Api.FatalError { message }, _ -> Firebug.console##log message
   | _ -> failwith "invalid state"
 
 let handle_request (request : Api.game_to_player_request) : Yojson.Safe.t Lwt.t
     =
   match request, S.value state_s with
-  | Api.StartGame { kingdom; order }, Connected PreStart ->
-    set_state (Connected (InPlay { kingdom; order; turn = NotYourTurn }));
+  | ( Api.StartGame { kingdom; order },
+      Connected { name; connection; game_state = PreStart } ) ->
+    set_state
+      (Connected
+         {
+           name;
+           connection;
+           game_state = InPlay { kingdom; order; turn = NotYourTurn };
+         }
+      );
     Lwt.return (`Assoc [])
   | _ -> failwith "invalid state"
 
-let render_turn : turn -> Html_types.div Html.elt =
+let play_data_app () : Html_types.div Html.elt * (Card.t -> Yojson.Safe.t Lwt.t)
+    =
+  let card_s, set_card = S.create None in
+  let promise, resolver = Lwt.wait () in
+  let get_data (card : Card.t) : Yojson.Safe.t Lwt.t =
+    set_card (Some card);
+    promise
+  in
+  let render_app : Card.t option -> Html_types.div Html.elt =
+    let open Html in
+    function
+    | None -> div []
+    | Some card -> (
+      match card with
+      | Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse
+      | Cellar | Chapel | Moat | Harbinger | Merchant | Vassal | Village
+      | Workshop | Bureaucrat | Militia | Moneylender | Poacher | Remodel
+      | Smithy | ThroneRoom | Bandit | CouncilRoom | Festival | Laboratory
+      | Library | Market | Mine | Sentry | Witch | Artisan ->
+        Lwt.wakeup_later resolver `Null;
+        div []
+    )
+  in
+  R.Html.div @@ RList.singleton_s @@ S.map render_app card_s, get_data
+
+let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
   let open Html in
+  let play_data_app, get_play_data = play_data_app () in
+  let play_card (card : Card.t) _ =
+    Lwt.async (fun () ->
+        let%lwt data = get_play_data card in
+        let%lwt response =
+          Requests.request ~connection (Api.Play { card; data })
+        in
+        Firebug.console##log response;
+        Lwt.return_unit
+    );
+    false
+  in
+  let buy_card (card : Card.t) _ =
+    Lwt.async (fun () ->
+        let%lwt response = Requests.request ~connection (Api.Buy { card }) in
+        Firebug.console##log response;
+        Lwt.return_unit
+    );
+    false
+  in
   function
   | NotYourTurn -> div [txt "It is not currently your turn."]
   | YourTurn
@@ -147,24 +216,36 @@ let render_turn : turn -> Html_types.div Html.elt =
       [
         div [txt "It is your turn."];
         div
-          ~a:[a_class ["d-flex"]]
-          (txt "Supply:"
-          :: List.map (supply |> Map.to_alist) ~f:(fun (card, amount) ->
-                 div
-                   ~a:[a_class ["bg-light"]]
-                   [
-                     txt (Card.to_string card);
-                     txt " : ";
-                     txt (Int.to_string amount);
-                   ]
-             )
-          );
-        div
           [
-            txt
-              (Printf.sprintf
-                 "Hand: %s"
-                 (List.map ~f:Card.to_string hand |> String.concat ~sep:", ")
+            div [txt "Supply:"];
+            div
+              ~a:[a_class ["d-flex"; "flex-wrap"; "justify-content-around"]]
+              (List.map (supply |> Map.to_alist) ~f:(fun (card, amount) ->
+                   div
+                     ~a:
+                       [
+                         a_class
+                           [
+                             "bg-primary";
+                             "m-2";
+                             "p-2";
+                             "rounded";
+                             "text-light";
+                             "fw-semibold";
+                           ];
+                         a_role ["button"];
+                         a_onclick (buy_card card);
+                       ]
+                     [
+                       div [txt @@ Card.to_string card];
+                       div
+                         ~a:[a_class ["d-flex"; "justify-content-between"]]
+                         [
+                           div [txt @@ Int.to_string amount];
+                           div [txt "$"; txt @@ Int.to_string @@ Card.cost card];
+                         ];
+                     ]
+               )
               );
           ];
         div
@@ -187,6 +268,32 @@ let render_turn : turn -> Html_types.div Html.elt =
                  treasure
               );
           ];
+        play_data_app;
+        div
+          [
+            div [txt "Hand:"];
+            div
+              ~a:[a_class ["d-flex"; "flex-wrap"; "justify-content-center"]]
+              (List.map hand ~f:(fun card ->
+                   div
+                     ~a:
+                       [
+                         a_class
+                           [
+                             "bg-primary";
+                             "m-2";
+                             "p-2";
+                             "rounded";
+                             "text-light";
+                             "fw-semibold";
+                           ];
+                         a_role ["button"];
+                         a_onclick (play_card card);
+                       ]
+                     [txt @@ Card.to_string card]
+               )
+              );
+          ];
       ]
 
 let game_state_app ~(game_key : string) ~(default_name : string) :
@@ -207,7 +314,7 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
           )
         in
         let connection = Connection.connect ~game_key ~name in
-        set_state (Connected PreStart);
+        set_state (Connected { name; connection; game_state = PreStart });
         let connection_handler : Jsonrpc.Packet.t -> unit = function
           | Jsonrpc.Packet.Notification Jsonrpc.Notification.{ method_; params }
             ->
@@ -232,7 +339,8 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
                   (Jsonrpc.Packet.Response (Jsonrpc.Response.ok id response));
                 Lwt.return_unit
             )
-          | _ -> failwith "unimplemented"
+          | Jsonrpc.Packet.Response response -> Requests.response response
+          | _ -> failwith "received unsupported JSONRPC message from server"
         in
         ignore (E.map connection_handler connection.event);
         false
@@ -262,8 +370,11 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
               ]
             [txt "Join Game"];
         ]
-    | Connected PreStart -> div [txt "Waiting for game to start ..."]
-    | Connected (InPlay { kingdom; order; turn }) ->
+    | Connected { game_state = PreStart; _ } ->
+      div [txt "Waiting for game to start ..."]
+    | Connected
+        { name = _; connection; game_state = InPlay { kingdom; order; turn } }
+      ->
       div
         [
           div
@@ -281,9 +392,9 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
               txt
                 (Printf.sprintf "Turn order: %s" (String.concat ~sep:", " order));
             ];
-          render_turn turn;
+          render_turn ~connection turn;
         ]
-    | Connected (GameOver { result; scores }) ->
+    | Connected { game_state = GameOver { result; scores }; _ } ->
       div
         [
           div [txt "Game over."];
@@ -306,7 +417,7 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
             ];
         ]
   in
-  R.Html.div (ReactiveData.RList.singleton_s (S.map render state_s))
+  R.Html.div (RList.singleton_s (S.map render state_s))
 
 let get_data_attribute (container : Dom_html.element Js.t) (attribute : string)
     : string =

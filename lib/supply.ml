@@ -2,6 +2,8 @@ open Base
 
 type t = (Card.t, int, CardComparator.comparator_witness) Map.t
 
+let equal : t -> t -> bool = Map.equal Int.equal
+
 let initial_supply_of_card : Card.t -> int = function
   | Card.Gardens -> 12
   | _ -> 10

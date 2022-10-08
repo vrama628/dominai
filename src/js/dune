@@ -10,7 +10,7 @@
   jsonrpc)
  (modes js)
  (preprocess
-  (pps js_of_ocaml-ppx lwt_ppx ppx_yojson_conv)))
+  (pps js_of_ocaml-ppx lwt_ppx ppx_yojson_conv ppx_deriving.eq)))
 
 (alias
  (name app)
