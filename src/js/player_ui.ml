@@ -97,6 +97,9 @@ type game_state =
       scores : Scores.t;
     }
 
+let () =
+  ignore Requests.(request, response, GameOver { result = Api.Win; scores = [] })
+
 type app_state =
   | PreJoin
   | Connected of game_state

@@ -97,6 +97,13 @@ module Player = struct
       discard : Card.t list;
     }
 
+    let debug_str { deck; hand; discard } : string =
+      Printf.sprintf
+        "{ deck=%s; hand=%s; discard=%s }"
+        (List.to_string ~f:Card.to_string deck)
+        (List.to_string ~f:Card.to_string hand)
+        (List.to_string ~f:Card.to_string discard)
+
     let take_from_deck (cards : t) : (Card.t * t) option =
       let cards =
         match cards with
@@ -167,12 +174,69 @@ module Player = struct
     cards : Cards.t;
   }
 
+  let reset (player : t) = { player with cards = Cards.create () }
+
+  let log { name; cards; pending; _ } : unit =
+    Dream.log
+      "Player %s: Cards=%s, pending=%s"
+      name
+      (Cards.debug_str cards)
+      (Hashtbl.keys pending |> List.to_string ~f:Int.to_string)
+
   module PublicState = struct
     type t = { name : string } [@@deriving yojson_of]
   end
 
   let yojson_of_t { name; _ } : Yojson.Safe.t =
     PublicState.({ name } |> yojson_of_t)
+
+  let notify_websocket
+      ~(websocket : Dream.websocket)
+      (notification : game_to_player_notification) =
+    let method_, params =
+      notification
+      |> yojson_of_game_to_player_notification
+      |> method_and_params_of_json
+    in
+    Lwt.async (fun () ->
+        Jsonrpc.Notification.create ~method_ ~params ()
+        |> Jsonrpc.Notification.yojson_of_t
+        |> Yojson.Safe.to_string
+        |> Dream.send websocket
+    )
+
+  let notify { websocket; name; _ } (notification : game_to_player_notification)
+      : unit =
+    Dream.log
+      "Player %s: Notifying %s"
+      name
+      (notification
+      |> yojson_of_game_to_player_notification
+      |> Yojson.Safe.to_string
+      );
+    notify_websocket ~websocket notification
+
+  let disconnect_resolver ~(resolver : unit Lwt.u) = Lwt.wakeup resolver ()
+
+  let disconnect ({ resolver; _ } : t) : unit = disconnect_resolver ~resolver
+
+  (** notifies and disconnects the player *)
+  let fatal_error_message
+      ~(message : string)
+      ~(websocket : Dream.websocket)
+      ~(resolver : unit Lwt.u) : unit =
+    notify_websocket ~websocket (FatalError { message });
+    disconnect_resolver ~resolver
+
+  let fatal_error
+      (error : Jsonrpc.Response.Error.t)
+      ({ websocket; resolver; name; _ } : t) : unit =
+    Dream.log
+      "Player %s Fatal Error: %s"
+      name
+      (error |> Jsonrpc.Response.Error.yojson_of_t |> Yojson.Safe.to_string);
+    let Jsonrpc.Response.Error.{ message; _ } = error in
+    fatal_error_message ~message ~websocket ~resolver
 
   let create
       ~(name : string)
@@ -182,6 +246,7 @@ module Player = struct
          (Jsonrpc.Json.t, Jsonrpc.Response.Error.t) result Lwt.t
          )
       ~(on_disconnect : unit -> unit) : unit Lwt.t * t =
+    let promise, resolver = Lwt.wait () in
     let pending = Hashtbl.create (module Int) in
     let rec listen () =
       match%lwt Dream.receive websocket with
@@ -189,6 +254,7 @@ module Player = struct
         on_disconnect ();
         Lwt.return_unit
       | Some message ->
+        Dream.log "Player %s sent %s" name message;
         begin
           match
             message |> Yojson.Safe.from_string |> Jsonrpc.Packet.t_of_yojson
@@ -213,18 +279,51 @@ module Player = struct
                   | Ok json -> Jsonrpc.Response.ok id json
                   | Error error -> Jsonrpc.Response.error id error
                 in
+                Dream.log
+                  "Player %s Response %s: %s"
+                  name
+                  (Jsonrpc.Id.yojson_of_t id |> Yojson.Safe.to_string)
+                  (Jsonrpc.Response.yojson_of_t response
+                  |> Yojson.Safe.to_string
+                  );
                 response
                 |> Jsonrpc.Response.yojson_of_t
                 |> Yojson.Safe.to_string
                 |> Dream.send websocket
             )
-          | _ -> failwith "TODO"
+          | unimplemented ->
+            let unimplemented_msg =
+              unimplemented
+              |> Jsonrpc.Packet.yojson_of_t
+              |> Yojson.Safe.pretty_to_string
+            in
+            Dream.log
+              "Player %s sent unsupported JSONRPC packet: %s"
+              name
+              unimplemented_msg;
+            let message =
+              Printf.sprintf "Unsupported JSON-RPC message %s" unimplemented_msg
+            in
+            fatal_error_message ~message ~resolver ~websocket
+          | exception Yojson.Json_error msg ->
+            Dream.log "Player %s: error while parsing JSON: %s" name msg;
+            let message = Printf.sprintf "Invalid JSON %s" msg in
+            fatal_error_message ~message ~resolver ~websocket
+          | exception exn ->
+            Dream.log
+              "Unrecognized error while parsing message: %s"
+              (Exn.to_string_mach exn);
+            let message =
+              Printf.sprintf
+                "Encountered error while parsing message: %s"
+                (Exn.to_string_mach exn)
+            in
+            fatal_error_message ~message ~resolver ~websocket
         end;
         listen ()
     in
     Lwt.async listen;
     let cards = Cards.create () in
-    let promise, resolver = Lwt.wait () in
     promise, { name; websocket; pending; cards; resolver }
 
   let name { name; _ } : string = name
@@ -267,8 +366,12 @@ module Player = struct
       Ref.replace counter (( + ) 1);
       !counter
 
-  let request { websocket; pending; _ } (request : game_to_player_request) :
-      Yojson.Safe.t Lwt.t =
+  let request { websocket; pending; name; _ } (request : game_to_player_request)
+      : Yojson.Safe.t Lwt.t =
+    Dream.log
+      "Player %s: Notifying %s"
+      name
+      (request |> yojson_of_game_to_player_request |> Yojson.Safe.to_string);
     let method_, params =
       request |> yojson_of_game_to_player_request |> method_and_params_of_json
     in
@@ -285,28 +388,6 @@ module Player = struct
         |> Dream.send websocket
     );
     promise
-
-  let notify { websocket; _ } (notification : game_to_player_notification) :
-      unit =
-    let method_, params =
-      notification
-      |> yojson_of_game_to_player_notification
-      |> method_and_params_of_json
-    in
-    Lwt.async (fun () ->
-        Jsonrpc.Notification.create ~method_ ~params ()
-        |> Jsonrpc.Notification.yojson_of_t
-        |> Yojson.Safe.to_string
-        |> Dream.send websocket
-    )
-
-  let disconnect (player : t) : unit = Lwt.wakeup player.resolver ()
-
-  (** notifies and disconnects the player *)
-  let fatal_error (error : Jsonrpc.Response.Error.t) (player : t) : unit =
-    let Jsonrpc.Response.Error.{ message; _ } = error in
-    notify player (FatalError { message });
-    disconnect player
 
   let victory_points { cards; _ } : int =
     let all_cards = Cards.all_cards cards in
@@ -445,18 +526,38 @@ module CurrentPlayer = struct
 end
 open CurrentPlayer
 
+type kingdom_selection =
+  | FirstGame
+  | DeckTop
+  | SleightOfHand
+  | Engines
+  | Random
+[@@deriving yojson_of]
+
+let kingdom_selection_of_string = function
+  | "first_game" -> FirstGame
+  | "deck_top" -> DeckTop
+  | "sleight_of_hand" -> SleightOfHand
+  | "engines" -> Engines
+  | "random" -> Random
+  | other ->
+    Dream.log "Invalid kingdom selection %s" other;
+    failwith "Invalid kingdom selection"
+
 type turn = {
   kingdom : Card.t list;
   supply : Supply.t;
   trash : Trash.t;
   current_player : CurrentPlayer.t;
   next_players : Player.t list;
+  kingdom_selection : kingdom_selection;
 }
 [@@deriving yojson_of]
 
 type state =
   | PreStart of {
       num_players : int;
+      kingdom_selection : kingdom_selection;
       players : Player.t list;
     }
   | Turn of turn
@@ -506,18 +607,118 @@ let start_turn
     ~(supply : Supply.t)
     ~(trash : Trash.t)
     ~(player : Player.t)
-    ~(next_players : Player.t list) : unit Lwt.t =
+    ~(next_players : Player.t list)
+    ~(kingdom_selection : kingdom_selection) : unit Lwt.t =
+  Dream.log "Player %s starting turn" player.name;
+  Player.log player;
   let current_player =
     let turn_status = TurnStatus.initial in
     CurrentPlayer.{ player; turn_status }
   in
-  game.set (Turn { kingdom; supply; trash; current_player; next_players });
+  game.set
+    (Turn
+       {
+         kingdom;
+         supply;
+         trash;
+         current_player;
+         next_players;
+         kingdom_selection;
+       }
+    );
   Player.notify
     player
     (StartTurn (CurrentPlayer.turn_info current_player ~supply ~trash));
   Lwt.return_unit
 
-let game_over ~(players : Player.t list) : unit =
+(* PRECONDITION: between 2 and 4 players *)
+let start_game
+    ~(game : t)
+    ~(kingdom_selection : kingdom_selection)
+    ~(players : Player.t list) : unit Lwt.t =
+  let player, next_players =
+    match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
+  in
+  let kingdom =
+    match kingdom_selection with
+    | FirstGame ->
+      Card.
+        [
+          Cellar;
+          Market;
+          Merchant;
+          Militia;
+          Mine;
+          Moat;
+          Remodel;
+          Smithy;
+          Village;
+          Workshop;
+        ]
+    | DeckTop ->
+      Card.
+        [
+          Artisan;
+          Bureaucrat;
+          CouncilRoom;
+          Festival;
+          Harbinger;
+          Laboratory;
+          Moneylender;
+          Sentry;
+          Vassal;
+          Village;
+        ]
+    | SleightOfHand ->
+      Card.
+        [
+          Cellar;
+          CouncilRoom;
+          Festival;
+          Gardens;
+          Library;
+          Harbinger;
+          Militia;
+          Poacher;
+          Smithy;
+          ThroneRoom;
+        ]
+    | Engines ->
+      Card.
+        [
+          Chapel;
+          Moat;
+          Vassal;
+          Village;
+          Militia;
+          Smithy;
+          Festival;
+          Laboratory;
+          Library;
+          Witch;
+        ]
+    | Random -> List.take (shuffle randomizer_cards) 10
+  in
+  let supply = Supply.create ~kingdom ~n_players:(List.length players) in
+  let trash = [] in
+  let order = List.map (player :: next_players) ~f:Player.name in
+  let%lwt _ =
+    Lwt.all
+      (List.map players ~f:(fun player ->
+           Player.request player (StartGame { kingdom; order })
+       )
+      )
+  in
+  start_turn
+    ~game
+    ~kingdom
+    ~supply
+    ~trash
+    ~player
+    ~next_players
+    ~kingdom_selection
+
+let game_over ~game ~kingdom_selection ~(players : Player.t list) : unit Lwt.t =
   let scores =
     List.map players ~f:(fun player ->
         Player.name player, Player.victory_points player
@@ -529,15 +730,35 @@ let game_over ~(players : Player.t list) : unit =
     |> List.max_elt ~compare:Int.compare
     |> Option.value_exn
   in
-  List.iter players ~f:(fun player ->
-      let result =
-        if Player.victory_points player = highest_score then
-          Win
-        else
-          Lose
-      in
-      Player.notify player (GameOver { scores; result });
-      Player.disconnect player
+  let%lwt responses =
+    Lwt.all
+      (List.map players ~f:(fun player ->
+           let result =
+             if Player.victory_points player = highest_score then
+               Win
+             else
+               Lose
+           in
+           let%lwt response =
+             Player.request player (GameOver { scores; result })
+           in
+           let%bind PlayerToGameResponse.GameOver.{ rematch } =
+             parse PlayerToGameResponse.GameOver.t_of_yojson response
+           in
+           return rematch
+       )
+      )
+  in
+  if
+    List.for_all responses ~f:(fun response ->
+        match response with Ok true -> true | _ -> false
+    )
+  then
+    let players = List.map players ~f:Player.reset in
+    start_game ~game ~kingdom_selection ~players
+  else (
+    List.iter players ~f:(fun player -> Player.disconnect player);
+    Lwt.return_unit
   )
 
 let end_turn ~(game : t) ~(name : string) :
@@ -550,10 +771,13 @@ let end_turn ~(game : t) ~(name : string) :
         kingdom;
         supply;
         trash;
+        kingdom_selection;
         _;
       }
     when String.equal (CurrentPlayer.name current_player) name ->
     let prev_player = CurrentPlayer.clean_up current_player in
+    Dream.log "Player %s just ended their turn" name;
+    Player.log prev_player;
     let end_turn_response =
       let hand = Player.get_hand prev_player in
       let discard = Player.get_discard prev_player in
@@ -562,7 +786,12 @@ let end_turn ~(game : t) ~(name : string) :
     in
     let next_players = next_players @ [prev_player] in
     if Supply.game_is_over supply then
-      game_over ~players:(next_player :: next_players)
+      Lwt.async (fun () ->
+          game_over
+            ~kingdom_selection
+            ~game
+            ~players:(next_player :: next_players)
+      )
     else
       Lwt.async (fun () ->
           start_turn
@@ -572,12 +801,16 @@ let end_turn ~(game : t) ~(name : string) :
             ~trash
             ~player:next_player
             ~next_players
+            ~kingdom_selection
       );
     Lwt.return (Ok end_turn_response)
   | _ -> error "It is not your turn."
 
 (* PRECONDITION: between 2 and 4 players *)
-let start_game ~(game : t) ~(players : Player.t list) : unit Lwt.t =
+let start_game
+    ~(game : t)
+    ~(players : Player.t list)
+    ~(kingdom_selection : kingdom_selection) : unit Lwt.t =
   let player, next_players =
     match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
   in
@@ -592,7 +825,14 @@ let start_game ~(game : t) ~(players : Player.t list) : unit Lwt.t =
        )
       )
   in
-  start_turn ~game ~kingdom ~supply ~trash ~player ~next_players
+  start_turn
+    ~game
+    ~kingdom
+    ~supply
+    ~trash
+    ~player
+    ~next_players
+    ~kingdom_selection
 
 let react ~(player : Player.t) ~(card : Card.t) : unit Errorable.t =
   if Card.is_reaction card then
@@ -665,17 +905,20 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     let player = Player.draw_n 1 current_player.player in
     let turn_status = TurnStatus.add_actions 1 turn_status in
     let Player.Cards.{ discard; _ } = player.cards in
-    let%lwt response = Player.request player (Harbinger { discard }) in
-    let%bind PlayerToGameResponse.Harbinger.{ card } =
-      parse PlayerToGameResponse.Harbinger.t_of_yojson response
+    let%bind player =
+      if List.is_empty discard then
+        return player
+      else
+        let%lwt response = Player.request player (Harbinger { discard }) in
+        let%bind PlayerToGameResponse.Harbinger.{ card } =
+          parse PlayerToGameResponse.Harbinger.t_of_yojson response
+        in
+        match find_and_remove card discard with
+        | None -> error "Card %s not in discard pile." (Card.to_string card)
+        | Some discard ->
+          let player = { player with cards = { player.cards with discard } } in
+          return (Player.topdeck card player)
     in
-    let%bind discard =
-      match find_and_remove card discard with
-      | None -> error "Card %s not in discard pile." (Card.to_string card)
-      | Some discard -> return discard
-    in
-    let player = { player with cards = { player.cards with discard } } in
-    let player = Player.topdeck card player in
     let current_player = { player; turn_status } in
     return { turn with current_player }
   | Card.Merchant ->
@@ -1043,10 +1286,10 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     return { turn with current_player = { turn_status; player } }
   | Card.Library ->
     let rec draw_until_7 (player : Player.t) : Player.t Errorable.t =
-      if List.length (Player.get_hand current_player.player) >= 7 then
+      if List.length (Player.get_hand player) >= 7 then
         return player
       else
-        match Player.take_from_deck current_player.player with
+        match Player.take_from_deck player with
         | None -> return player
         | Some (card, player) ->
           if Card.is_action card then
@@ -1266,10 +1509,12 @@ let buy ~(game : t) ~(card : Card.t) ~(name : string) :
       )
   | _ -> error "It is not your turn."
 
-let create ~(num_players : int) : t =
+let create ~(num_players : int) ~(kingdom_selection : kingdom_selection) : t =
   assert (2 <= num_players && num_players <= 6);
   let state, set =
-    React.S.create ~eq:phys_equal (PreStart { num_players; players = [] })
+    React.S.create
+      ~eq:phys_equal
+      (PreStart { num_players; kingdom_selection; players = [] })
   in
   { state; set }
 
@@ -1277,18 +1522,19 @@ let create ~(num_players : int) : t =
 let on_disconnect ~(game : t) ~(name : string) : unit =
   let new_state =
     match React.S.value game.state with
-    | PreStart { num_players; players } ->
+    | PreStart { num_players; kingdom_selection; players } ->
       let players =
         List.filter players ~f:(fun player ->
             String.( <> ) player.Player.name name
         )
       in
-      PreStart { num_players; players }
+      PreStart { num_players; kingdom_selection; players }
     | Turn turn ->
       if String.equal turn.current_player.CurrentPlayer.player.Player.name name
       then (
         match turn.next_players with
-        | [] -> PreStart { num_players = 2; players = [] }
+        | [] ->
+          PreStart { num_players = 2; kingdom_selection = Random; players = [] }
         | player :: next_players ->
           Lwt.async (fun () ->
               start_turn
@@ -1298,6 +1544,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
                 ~trash:turn.trash
                 ~player
                 ~next_players
+                ~kingdom_selection:Random
           );
           Turn turn
       ) else
@@ -1315,7 +1562,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
 let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     unit Lwt.t =
   match React.S.value game.state with
-  | PreStart { num_players; players } ->
+  | PreStart { num_players; kingdom_selection; players } ->
     if
       List.exists players ~f:(fun player -> String.equal name player.Player.name)
     then
@@ -1340,9 +1587,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         Player.create ~name ~websocket ~handler ~on_disconnect
       in
       let players = player :: players in
+      game.set (PreStart { num_players; kingdom_selection; players });
       if List.length players >= num_players then
-        Lwt.async (fun () -> start_game ~game ~players)
-      else
-        game.set (PreStart { num_players; players });
+        Lwt.async (fun () -> start_game ~game ~kingdom_selection ~players);
       promise
   | _ -> failwith "Game has already started."

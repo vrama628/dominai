@@ -223,14 +223,14 @@ Response:
 
 ### `Buy`
 ```
-"Play" // player to game request
+"Buy" // player to game request
 Request:
 {
     card: Card;
 }
 Response:
 {
-    hand: [Card];
+    hand: Card[];
     discard: number;
     deck: number;
     supply: { [Card]: number; };
@@ -340,11 +340,15 @@ Once the game is over, the game will send you a `GameOver` notification.
 
 ### `GameOver`
 ```
-"GameOver" // game to player notification
-Notification:
+"GameOver" // game to player request
+Request:
 {
     result: "Win" | "Lose";
     scores: { [string]: number };
+}
+Response:
+{
+    rematch: bool;
 }
 ```
 

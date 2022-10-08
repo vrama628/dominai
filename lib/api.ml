@@ -4,6 +4,11 @@ type data = Yojson.Safe.t
 let data_of_yojson = Fn.id
 let yojson_of_data = Fn.id
 
+type game_over_result =
+  | Win
+  | Lose
+[@@deriving yojson]
+
 type player_to_game_request =
   | EndTurn of unit
   | Play of {
@@ -33,11 +38,6 @@ type turn_info = {
 }
 [@@deriving yojson]
 
-type game_over_result =
-  | Win
-  | Lose
-[@@deriving yojson]
-
 let yojson_of_game_over_result (game_over_result : game_over_result) :
     Yojson.Safe.t =
   match yojson_of_game_over_result game_over_result with
@@ -50,10 +50,6 @@ let game_over_result_of_yojson (json : Yojson.Safe.t) : game_over_result =
 type game_to_player_notification =
   | StartTurn of turn_info
   | FatalError of { message : string }
-  | GameOver of {
-      result : game_over_result;
-      scores : Scores.t;
-    }
 [@@deriving yojson]
 
 type game_to_player_request =
@@ -79,6 +75,10 @@ type game_to_player_request =
   | Sentry of {
       hand : Card.t list;
       cards : Card.t list;
+    }
+  | GameOver of {
+      result : game_over_result;
+      scores : Scores.t;
     }
 [@@deriving yojson]
 
@@ -181,5 +181,8 @@ module PlayerToGameResponse = struct
     [@@deriving of_yojson]
 
     type t = card_placement list [@@deriving of_yojson]
+  end
+  module GameOver = struct
+    type t = { rematch : bool } [@@deriving of_yojson]
   end
 end

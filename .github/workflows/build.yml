@@ -1,7 +1,7 @@
 name: Check that server builds successfully
 
 concurrency: 
-  group: ${{ github.ref }}
+  group: build-${{ github.ref }}
   cancel-in-progress: true
 
 on: [workflow_dispatch, push]
