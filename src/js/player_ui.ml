@@ -110,6 +110,53 @@ let (state_s, set_state) : app_state signal * (?step:step -> app_state -> unit)
     =
   S.create ~eq:equal_app_state PreJoin
 
+let update_turn_info (turn_info : Api.turn_info) : unit =
+  match S.value state_s with
+  | Connected
+      ( { game_state = InPlay ({ turn = YourTurn _; _ } as in_play); _ } as
+      connected
+      ) ->
+    set_state
+      (Connected
+         {
+           connected with
+           game_state = InPlay { in_play with turn = YourTurn turn_info };
+         }
+      )
+  | _ -> ()
+
+type get_data =
+  | Play of Card.t
+  | Rematch
+
+let (get_data_app, get_data) :
+      Html_types.div Html.elt * (get_data -> Yojson.Safe.t Lwt.t) =
+  let apps, apps_handle = RList.create [] in
+  let get_data (request : get_data) : Yojson.Safe.t Lwt.t =
+    let promise, resolver = Lwt.wait () in
+    let head = request, resolver in
+    RList.cons head apps_handle;
+    Lwt.async (fun () ->
+        let%lwt _ = promise in
+        RList.remove_eq (apps, apps_handle) head;
+        Lwt.return_unit
+    );
+    promise
+  in
+  let render_app (request, resolver) : Html_types.div Html.elt =
+    let open Html in
+    match request with
+    | Play
+        Card.(
+          Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse)
+      ->
+      Lwt.wakeup_later resolver `Null;
+      div []
+    | Play _ -> div [txt "MAAAAAHHHAAAAA"]
+    | Rematch -> div [txt "TODO"]
+  in
+  R.Html.div (RList.map render_app apps), get_data
+
 let handle_notification (notification : Api.game_to_player_notification) : unit
     =
   match notification, S.value state_s with
@@ -136,44 +183,32 @@ let handle_request (request : Api.game_to_player_request) : Yojson.Safe.t Lwt.t
   | Api.GameOver { result; scores }, Connected connected ->
     let game_state = GameOver { result; scores } in
     set_state (Connected { connected with game_state });
-    Lwt.return (`Assoc ["rematch", `Bool false])
+    get_data Rematch
   | _ -> failwith "invalid state"
 
-let play_data_app () : Html_types.div Html.elt * (Card.t -> Yojson.Safe.t Lwt.t)
-    =
-  let card_s, set_card = S.create None in
-  let promise, resolver = Lwt.wait () in
-  let get_data (card : Card.t) : Yojson.Safe.t Lwt.t =
-    set_card (Some card);
-    promise
-  in
-  let render_app : Card.t option -> Html_types.div Html.elt =
+let (errors_app, add_error) : Html_types.div Html.elt * (string -> unit) =
+  let errors, errors_handle = RList.create [] in
+  let add_error (message : string) = RList.cons message errors_handle in
+  let render_error (message : string) =
     let open Html in
-    function
-    | None -> div []
-    | Some card -> (
-      match card with
-      | Copper | Silver | Gold | Estate | Duchy | Province | Gardens | Curse
-      | Cellar | Chapel | Moat | Harbinger | Merchant | Vassal | Village
-      | Workshop | Bureaucrat | Militia | Moneylender | Poacher | Remodel
-      | Smithy | ThroneRoom | Bandit | CouncilRoom | Festival | Laboratory
-      | Library | Market | Mine | Sentry | Witch | Artisan ->
-        Lwt.wakeup_later resolver `Null;
-        div []
-    )
+    div ~a:[a_class ["alert"; "alert-danger"]; a_role ["alert"]] [txt message]
   in
-  R.Html.div @@ RList.singleton_s @@ S.map render_app card_s, get_data
+  R.Html.div (RList.map render_error errors), add_error
 
 let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
   let open Html in
-  let play_data_app, get_play_data = play_data_app () in
   let play_card (card : Card.t) _ =
     Lwt.async (fun () ->
-        let%lwt data = get_play_data card in
+        let%lwt data = get_data (Play card) in
         let%lwt response =
           Requests.request ~connection (Api.Play { card; data })
         in
-        Firebug.console##log response;
+        ( match response with
+        | Error err -> add_error err.Jsonrpc.Response.Error.message
+        | Ok json ->
+          let turn_info = Api.GameToPlayerResponse.Buy.t_of_yojson json in
+          update_turn_info turn_info
+        );
         Lwt.return_unit
     );
     false
@@ -181,7 +216,12 @@ let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
   let buy_card (card : Card.t) _ =
     Lwt.async (fun () ->
         let%lwt response = Requests.request ~connection (Api.Buy { card }) in
-        Firebug.console##log response;
+        ( match response with
+        | Error err -> add_error err.Jsonrpc.Response.Error.message
+        | Ok json ->
+          let turn_info = Api.GameToPlayerResponse.Buy.t_of_yojson json in
+          update_turn_info turn_info
+        );
         Lwt.return_unit
     );
     false
@@ -259,7 +299,6 @@ let render_turn ~(connection : Connection.t) : turn -> Html_types.div Html.elt =
                  treasure
               );
           ];
-        play_data_app;
         div
           [
             div [txt "Hand:"];
@@ -408,7 +447,12 @@ let game_state_app ~(game_key : string) ~(default_name : string) :
             ];
         ]
   in
-  R.Html.div (RList.singleton_s (S.map render state_s))
+  div
+    [
+      errors_app;
+      get_data_app;
+      R.Html.div (RList.singleton_s (S.map render state_s));
+    ]
 
 let get_data_attribute (container : Dom_html.element Js.t) (attribute : string)
     : string =

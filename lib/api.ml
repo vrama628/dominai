@@ -106,13 +106,13 @@ module GameToPlayerResponse = struct
       deck : int;
       supply : Supply.t;
     }
-    [@@deriving yojson_of]
+    [@@deriving yojson]
   end
   module Play = struct
-    type t = turn_info [@@deriving yojson_of]
+    type t = turn_info [@@deriving yojson]
   end
   module Buy = struct
-    type t = turn_info [@@deriving yojson_of]
+    type t = turn_info [@@deriving yojson]
   end
 end
 
