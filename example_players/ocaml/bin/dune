@@ -1,0 +1,4 @@
+(executable
+ (public_name dominai_client)
+ (name main)
+ (libraries dominai_client core_unix.command_unix))
