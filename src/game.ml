@@ -763,34 +763,6 @@ let end_turn ~(game : t) ~(name : string) :
     Lwt.return (Ok end_turn_response)
   | _ -> error "It is not your turn."
 
-(* PRECONDITION: between 2 and 4 players *)
-let start_game
-    ~(game : t)
-    ~(players : Player.t list)
-    ~(kingdom_selection : kingdom_selection) : unit Lwt.t =
-  let player, next_players =
-    match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
-  in
-  let kingdom = List.take (shuffle randomizer_cards) 10 in
-  let supply = Supply.create ~kingdom ~n_players:(List.length players) in
-  let trash = [] in
-  let order = List.map (player :: next_players) ~f:Player.name in
-  let%lwt _ =
-    Lwt.all
-      (List.map players ~f:(fun player ->
-           Player.request player (StartGame { kingdom; order })
-       )
-      )
-  in
-  start_turn
-    ~game
-    ~kingdom
-    ~supply
-    ~trash
-    ~player
-    ~next_players
-    ~kingdom_selection
-
 let react ~(player : Player.t) ~(card : Card.t) : unit Errorable.t =
   if Card.is_reaction card then
     let%bind _ = Player.remove_from_hand [card] player in

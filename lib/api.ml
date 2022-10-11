@@ -190,7 +190,7 @@ end
 
 module Play = struct
   module Cellar = struct
-    type t = Card.t list [@@deriving of_yojson]
+    type t = Card.t list [@@deriving yojson]
   end
   module Chapel = struct
     type t = Card.t list [@@deriving of_yojson]

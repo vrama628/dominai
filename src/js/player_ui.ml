@@ -140,9 +140,83 @@ let set_state_end_turn () : unit =
       )
   | _ -> ()
 
+let get_hand_exn () : Card.t list =
+  match S.value state_s with
+  | Connected { game_state = InPlay { turn = YourTurn { hand; _ }; _ }; _ } ->
+    hand
+  | _ -> failwith "invalid state"
+
 type get_data =
   | Play of Card.t
   | Rematch
+
+let card_selector ~(cards : Card.t list) :
+    [> Html_types.div ] Html.elt * Card.t list Lwt.t =
+  let selection_s, set_selection =
+    S.create ~eq:Set.equal (Set.empty (module Int))
+  in
+  let toggle_selection i _ =
+    let current_selection = S.value selection_s in
+    let new_selection =
+      if Set.mem current_selection i then
+        Set.remove current_selection i
+      else
+        Set.add current_selection i
+    in
+    set_selection new_selection;
+    false
+  in
+  let promise, resolver = Lwt.wait () in
+  let done_selecting _ =
+    let selection = S.value selection_s in
+    let selected_cards =
+      List.map (Set.elements selection) ~f:(List.nth_exn cards)
+    in
+    Lwt.wakeup_later resolver selected_cards;
+    false
+  in
+  let app =
+    let open Html in
+    div
+      [
+        div
+          ~a:[a_class ["d-flex"; "flex-wrap"; "justify-content-center"]]
+          (List.mapi cards ~f:(fun i card ->
+               div
+                 ~a:
+                   [
+                     R.Html.a_class
+                       (S.map
+                          (fun selection ->
+                            ( if Set.mem selection i then
+                              "text-bg-primary"
+                            else
+                              "text-bg-secondary"
+                            )
+                            :: ["m-2"; "p-2"; "rounded"; "fw-semibold"]
+                          )
+                          selection_s
+                       );
+                     a_role ["button"];
+                     a_onclick (toggle_selection i);
+                   ]
+                 [txt @@ Card.to_string card]
+           )
+          );
+        div
+          [
+            button
+              ~a:
+                [
+                  a_button_type `Button;
+                  a_class ["btn"; "btn-primary"; "btn-lg"; "m-2"];
+                  a_onclick done_selecting;
+                ]
+              [txt "Done Selecting"];
+          ];
+      ]
+  in
+  app, promise
 
 let (get_data_app, get_data) :
       Html_types.div Html.elt * (get_data -> Yojson.Safe.t Lwt.t) =
@@ -167,7 +241,18 @@ let (get_data_app, get_data) :
       ->
       Lwt.wakeup_later resolver `Null;
       div []
-    | Play _ -> div [txt "MAAAAAHHHAAAAA"]
+    | Play Card.Cellar ->
+      let card_selector_app, cards_lwt =
+        card_selector ~cards:(get_hand_exn ())
+      in
+      Lwt.async (fun () ->
+          let%lwt cards = cards_lwt in
+          let json = Api.Play.Cellar.yojson_of_t cards in
+          Lwt.wakeup_later resolver json;
+          Lwt.return_unit
+      );
+      div [txt "Select which cards to discard:"; card_selector_app]
+    | Play _ -> div [txt "TODO"]
     | Rematch -> div [txt "TODO"]
   in
   R.Html.div (RList.map render_app apps), get_data
