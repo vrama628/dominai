@@ -242,9 +242,12 @@ let (get_data_app, get_data) :
       Lwt.wakeup_later resolver `Null;
       div []
     | Play Card.Cellar ->
-      let card_selector_app, cards_lwt =
-        card_selector ~cards:(get_hand_exn ())
+      let cards =
+        get_hand_exn ()
+        |> Helpers.find_and_remove Card.Cellar
+        |> Option.value_exn
       in
+      let card_selector_app, cards_lwt = card_selector ~cards in
       Lwt.async (fun () ->
           let%lwt cards = cards_lwt in
           let json = Api.Play.Cellar.yojson_of_t cards in
