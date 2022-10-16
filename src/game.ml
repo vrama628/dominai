@@ -1314,6 +1314,7 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
   | Card.Militia ->
     let { player; turn_status } = current_player in
     let%bind turn_status = TurnStatus.expend_action turn_status in
+    let turn_status = TurnStatus.add_treasure 2 turn_status in
     let%lwt next_players =
       Lwt_list.filter_map_p
         (fun player ->
