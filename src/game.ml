@@ -1,5 +1,6 @@
 open Core
 open Dominai
+open Ppx_yojson_conv_lib.Yojson_conv.Primitives
 
 module Errorable = struct
   type 'a errorable = ('a, Jsonrpc.Response.Error.t) result Lwt.t

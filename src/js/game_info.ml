@@ -5,6 +5,7 @@ open React
 open ReactiveData
 open Base
 open Dominai
+open Ppx_yojson_conv_lib.Yojson_conv.Primitives
 
 (* types mostly duplicated from game.ml *)
 
