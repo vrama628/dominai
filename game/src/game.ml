@@ -828,7 +828,7 @@ module CurrentPlayer = struct
 end
 open CurrentPlayer
 
-type kingdom = Card.t list [@@deriving yojson_of]
+type kingdom = Card.t list [@@deriving yojson]
 
 type turn = {
   kingdom : Card.t list;
@@ -854,37 +854,6 @@ type t = {
 }
 
 let yojson_of_t { state; set = _ } = yojson_of_state @@ React.S.value @@ state
-
-let randomizer_cards =
-  let open Card in
-  [
-    Cellar;
-    Chapel;
-    Moat;
-    Harbinger;
-    Merchant;
-    Vassal;
-    Village;
-    Workshop;
-    Bureaucrat;
-    Gardens;
-    Militia;
-    Moneylender;
-    Poacher;
-    Remodel;
-    Smithy;
-    ThroneRoom;
-    Bandit;
-    CouncilRoom;
-    Festival;
-    Laboratory;
-    Library;
-    Market;
-    Mine;
-    Sentry;
-    Witch;
-    Artisan;
-  ]
 
 let start_turn
     ~(game : t)
@@ -1695,6 +1664,7 @@ let create ~(num_players : int) ~(kingdom : kingdom) : t =
     List.fold ~init:(Set.empty (module Card)) ~f:Set.add kingdom
     |> Set.length
     = 10
+    && List.for_all ~f:Card.is_action kingdom
   );
   let state, set =
     React.S.create

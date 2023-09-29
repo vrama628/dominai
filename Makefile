@@ -1,7 +1,10 @@
-.PHONY: serve install
+.PHONY: dev game frontend
+MAKEFLAGS += -j8
 
-serve: install
-	opam exec dune exec dominai
+dev: game frontend
 
-install:
-	opam install -y . --deps-only
+game:
+	cd game && opam exec dune exec dominai
+
+frontend:
+	cd frontend && yarn dev

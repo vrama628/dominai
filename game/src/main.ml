@@ -1,5 +1,4 @@
 open Core
-open Tyxml.Html
 
 let games : (string, Game.t) Hashtbl.t = Hashtbl.create (module String)
 
@@ -55,14 +54,18 @@ let router : Dream.handler =
 
 let cors_middleware (handler : Dream.handler) (request : Dream.request) :
     Dream.response Lwt.t =
-  let%lwt response = handler request in
+  let%lwt response =
+    match Dream.method_ request with
+    | `OPTIONS -> Dream.empty `OK
+    | _ -> handler request
+  in
   Dream.add_header response "Access-Control-Allow-Origin" "*";
   Dream.add_header response "Access-Control-Allow-Headers" "*";
   Dream.add_header response "Access-Control-Allow-Methods" "*";
   Lwt.return response
 
 let () =
-  Dream.run ~interface:"0.0.0.0" ~port:8081
+  Dream.run ~interface:"0.0.0.0" ~port:3001
   @@ Dream.logger
   @@ cors_middleware
   @@ router
