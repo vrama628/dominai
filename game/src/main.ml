@@ -53,4 +53,16 @@ let router : Dream.handler =
       Dream.get "/join/:game" join_game;
     ]
 
-let () = Dream.run ~interface:"0.0.0.0" @@ Dream.logger @@ router
+let cors_middleware (handler : Dream.handler) (request : Dream.request) :
+    Dream.response Lwt.t =
+  let%lwt response = handler request in
+  Dream.add_header response "Access-Control-Allow-Origin" "*";
+  Dream.add_header response "Access-Control-Allow-Headers" "*";
+  Dream.add_header response "Access-Control-Allow-Methods" "*";
+  Lwt.return response
+
+let () =
+  Dream.run ~interface:"0.0.0.0" ~port:8081
+  @@ Dream.logger
+  @@ cors_middleware
+  @@ router

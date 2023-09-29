@@ -1774,4 +1774,4 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
       if List.length players >= num_players then
         Lwt.async (fun () -> start_game ~game ~kingdom ~players);
       promise
-  | _ -> failwith "Game has already started."
+  | _ -> Dream.close_websocket ~code:1013 websocket
