@@ -9,12 +9,6 @@ let generate_game_key () : string =
   String.init 20 ~f:(fun _ -> Random.char ())
   |> Base64.encode_exn ~pad:false ~alphabet:Base64.uri_safe_alphabet
 
-let generate_username () : string =
-  Printf.sprintf
-    "%s_%s"
-    (List.random_element_exn Static.adjectives)
-    (List.random_element_exn Static.nouns)
-
 module CreateGame = struct
   open Ppx_yojson_conv_lib.Yojson_conv.Primitives
   type request = {
