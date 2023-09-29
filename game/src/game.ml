@@ -183,9 +183,10 @@ module Supply = struct
 
   let empty_piles : t -> int = Map.count ~f:(( = ) 0)
 
-  (** assumes 2-4 players *)
-  let game_is_over (supply : t) : bool =
-    empty_piles supply >= 3 || Map.find_exn supply Card.Province <= 0
+  let game_is_over (supply : t) ~(num_players : int) : bool =
+    (num_players <= 4 && empty_piles supply >= 3)
+    || (num_players > 4 && empty_piles supply >= 4)
+    || Map.find_exn supply Card.Province <= 0
 end
 
 type turn_phase =
@@ -965,7 +966,7 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
       { hand; discard; deck; supply }
     in
     let next_players = next_players @ [prev_player] in
-    if Supply.game_is_over supply then
+    if Supply.game_is_over supply ~num_players:(List.length next_players) then
       Lwt.async (fun () ->
           game_over ~kingdom ~game ~players:(next_player :: next_players)
       )
