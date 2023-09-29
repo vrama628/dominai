@@ -1,3 +1,5 @@
+open Base
+
 type t =
   (* TREASURE CARDS *)
   | Copper
@@ -37,6 +39,12 @@ type t =
   | Witch
   | Artisan
 [@@deriving yojson, ord, sexp, eq]
+
+include Comparator.Make (struct
+  type nonrec t = t
+  let compare = compare
+  let sexp_of_t = sexp_of_t
+end)
 
 (* hack around ppx_yojson_conv's weird json translation of enums *)
 

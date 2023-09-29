@@ -24,10 +24,12 @@ module Errorable = struct
       (fun message ->
         Lwt.return
           ( if condition then
-            Ok ()
-          else
-            Error
-              Jsonrpc.Response.Error.(make ~code:Code.InvalidRequest ~message ())
+              Ok ()
+            else
+              Error
+                Jsonrpc.Response.Error.(
+                  make ~code:Code.InvalidRequest ~message ()
+                )
           )
       )
       fmt
@@ -826,23 +828,7 @@ module CurrentPlayer = struct
 end
 open CurrentPlayer
 
-type kingdom_selection =
-  | FirstGame
-  | DeckTop
-  | SleightOfHand
-  | Engines
-  | Random
-[@@deriving yojson_of]
-
-let kingdom_selection_of_string = function
-  | "first_game" -> FirstGame
-  | "deck_top" -> DeckTop
-  | "sleight_of_hand" -> SleightOfHand
-  | "engines" -> Engines
-  | "random" -> Random
-  | other ->
-    Dream.log "Invalid kingdom selection %s" other;
-    failwith "Invalid kingdom selection"
+type kingdom = Card.t list [@@deriving yojson_of]
 
 type turn = {
   kingdom : Card.t list;
@@ -850,14 +836,13 @@ type turn = {
   trash : Card.t list;
   current_player : CurrentPlayer.t;
   next_players : Player.t list;
-  kingdom_selection : kingdom_selection;
 }
 [@@deriving yojson_of]
 
 type state =
   | PreStart of {
       num_players : int;
-      kingdom_selection : kingdom_selection;
+      kingdom : kingdom;
       players : Player.t list;
     }
   | Turn of turn
@@ -907,97 +892,24 @@ let start_turn
     ~(supply : Supply.t)
     ~(trash : Card.t list)
     ~(player : Player.t)
-    ~(next_players : Player.t list)
-    ~(kingdom_selection : kingdom_selection) : unit Lwt.t =
+    ~(next_players : Player.t list) : unit Lwt.t =
   Dream.log "Player %s starting turn" player.name;
   Player.log player;
   let current_player =
     let turn_status = TurnStatus.initial in
     CurrentPlayer.{ player; turn_status }
   in
-  game.set
-    (Turn
-       {
-         kingdom;
-         supply;
-         trash;
-         current_player;
-         next_players;
-         kingdom_selection;
-       }
-    );
+  game.set (Turn { kingdom; supply; trash; current_player; next_players });
   Player.notify
     player
     (StartTurn (CurrentPlayer.turn_info current_player ~supply ~trash));
   Lwt.return_unit
 
 (* PRECONDITION: between 2 and 4 players *)
-let start_game
-    ~(game : t)
-    ~(kingdom_selection : kingdom_selection)
-    ~(players : Player.t list) : unit Lwt.t =
+let start_game ~(game : t) ~(kingdom : kingdom) ~(players : Player.t list) :
+    unit Lwt.t =
   let player, next_players =
     match shuffle players with p :: ps -> p, ps | _ -> failwith "unreachable"
-  in
-  let kingdom =
-    match kingdom_selection with
-    | FirstGame ->
-      Card.
-        [
-          Cellar;
-          Market;
-          Merchant;
-          Militia;
-          Mine;
-          Moat;
-          Remodel;
-          Smithy;
-          Village;
-          Workshop;
-        ]
-    | DeckTop ->
-      Card.
-        [
-          Artisan;
-          Bureaucrat;
-          CouncilRoom;
-          Festival;
-          Harbinger;
-          Laboratory;
-          Moneylender;
-          Sentry;
-          Vassal;
-          Village;
-        ]
-    | SleightOfHand ->
-      Card.
-        [
-          Cellar;
-          CouncilRoom;
-          Festival;
-          Gardens;
-          Library;
-          Harbinger;
-          Militia;
-          Poacher;
-          Smithy;
-          ThroneRoom;
-        ]
-    | Engines ->
-      Card.
-        [
-          Chapel;
-          Moat;
-          Vassal;
-          Village;
-          Militia;
-          Smithy;
-          Festival;
-          Laboratory;
-          Library;
-          Witch;
-        ]
-    | Random -> List.take (shuffle randomizer_cards) 10
   in
   let supply = Supply.create ~kingdom ~n_players:(List.length players) in
   let trash = [] in
@@ -1009,16 +921,9 @@ let start_game
        )
       )
   in
-  start_turn
-    ~game
-    ~kingdom
-    ~supply
-    ~trash
-    ~player
-    ~next_players
-    ~kingdom_selection
+  start_turn ~game ~kingdom ~supply ~trash ~player ~next_players
 
-let game_over ~game ~kingdom_selection ~(players : Player.t list) : unit Lwt.t =
+let game_over ~game ~kingdom ~(players : Player.t list) : unit Lwt.t =
   let scores =
     List.map players ~f:(fun player ->
         Player.name player, Player.victory_points player
@@ -1055,7 +960,7 @@ let game_over ~game ~kingdom_selection ~(players : Player.t list) : unit Lwt.t =
     )
   then
     let players = List.map players ~f:Player.reset in
-    start_game ~game ~kingdom_selection ~players
+    start_game ~game ~kingdom ~players
   else (
     List.iter players ~f:(fun player -> Player.disconnect player);
     Lwt.return_unit
@@ -1078,7 +983,6 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
         kingdom;
         supply;
         trash;
-        kingdom_selection;
         _;
       }
     when String.equal (CurrentPlayer.name current_player) name ->
@@ -1094,10 +998,7 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
     let next_players = next_players @ [prev_player] in
     if Supply.game_is_over supply then
       Lwt.async (fun () ->
-          game_over
-            ~kingdom_selection
-            ~game
-            ~players:(next_player :: next_players)
+          game_over ~kingdom ~game ~players:(next_player :: next_players)
       )
     else
       Lwt.async (fun () ->
@@ -1108,7 +1009,6 @@ let end_turn ~(game : t) ~(name : string) : end_turn_response errorable =
             ~trash
             ~player:next_player
             ~next_players
-            ~kingdom_selection
       );
     Lwt.return (Ok end_turn_response)
   | _ -> error "It is not your turn."
@@ -1679,8 +1579,8 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
       List.fold
         card_placements
         ~init:(player, turn.trash)
-        ~f:(fun (player, trash) PlayerToGameResponse.Sentry.{ card; placement }
-           ->
+        ~f:(fun
+            (player, trash) PlayerToGameResponse.Sentry.{ card; placement } ->
           match placement with
           | PlayerToGameResponse.Sentry.Trash -> player, card :: trash
           | PlayerToGameResponse.Sentry.Discard ->
@@ -1789,12 +1689,17 @@ let buy ~(game : t) ~(card : Card.t) ~(name : string) : turn_info errorable =
       )
   | _ -> error "It is not your turn."
 
-let create ~(num_players : int) ~(kingdom_selection : kingdom_selection) : t =
+let create ~(num_players : int) ~(kingdom : kingdom) : t =
   assert (2 <= num_players && num_players <= 6);
+  assert (
+    List.fold ~init:(Set.empty (module Card)) ~f:Set.add kingdom
+    |> Set.length
+    = 10
+  );
   let state, set =
     React.S.create
       ~eq:phys_equal
-      (PreStart { num_players; kingdom_selection; players = [] })
+      (PreStart { num_players; kingdom; players = [] })
   in
   { state; set }
 
@@ -1802,19 +1707,19 @@ let create ~(num_players : int) ~(kingdom_selection : kingdom_selection) : t =
 let on_disconnect ~(game : t) ~(name : string) : unit =
   let new_state =
     match React.S.value game.state with
-    | PreStart { num_players; kingdom_selection; players } ->
+    | PreStart { num_players; kingdom; players } ->
       let players =
         List.filter players ~f:(fun player ->
             String.( <> ) player.Player.name name
         )
       in
-      PreStart { num_players; kingdom_selection; players }
+      PreStart { num_players; kingdom; players }
     | Turn turn ->
       if String.equal turn.current_player.CurrentPlayer.player.Player.name name
       then (
         match turn.next_players with
         | [] ->
-          PreStart { num_players = 2; kingdom_selection = Random; players = [] }
+          PreStart { num_players = 2; kingdom = turn.kingdom; players = [] }
         | player :: next_players ->
           Lwt.async (fun () ->
               start_turn
@@ -1824,7 +1729,6 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
                 ~trash:turn.trash
                 ~player
                 ~next_players
-                ~kingdom_selection:Random
           );
           Turn turn
       ) else
@@ -1842,7 +1746,7 @@ let on_disconnect ~(game : t) ~(name : string) : unit =
 let add_player (game : t) (name : string) (websocket : Dream.websocket) :
     unit Lwt.t =
   match React.S.value game.state with
-  | PreStart { num_players; kingdom_selection; players } ->
+  | PreStart { num_players; kingdom; players } ->
     if
       List.exists players ~f:(fun player -> String.equal name player.Player.name)
     then
@@ -1866,8 +1770,8 @@ let add_player (game : t) (name : string) (websocket : Dream.websocket) :
         Player.create ~name ~websocket ~handler ~on_disconnect
       in
       let players = player :: players in
-      game.set (PreStart { num_players; kingdom_selection; players });
+      game.set (PreStart { num_players; kingdom; players });
       if List.length players >= num_players then
-        Lwt.async (fun () -> start_game ~game ~kingdom_selection ~players);
+        Lwt.async (fun () -> start_game ~game ~kingdom ~players);
       promise
   | _ -> failwith "Game has already started."
