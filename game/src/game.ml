@@ -1665,7 +1665,9 @@ let create ~(num_players : int) ~(kingdom : kingdom) : t =
     List.fold ~init:(Set.empty (module Card)) ~f:Set.add kingdom
     |> Set.length
     = 10
-    && List.for_all ~f:Card.is_action kingdom
+    && List.for_all
+         ~f:(fun card -> Card.is_action card || Card.equal card Card.Gardens)
+         kingdom
   );
   let state, set =
     React.S.create

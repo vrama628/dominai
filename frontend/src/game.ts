@@ -1,3 +1,5 @@
+import { CreateGameRequest, CreateGameResponse } from "./types";
+
 export async function createGame(
   createGameRequest: CreateGameRequest
 ): Promise<CreateGameResponse> {

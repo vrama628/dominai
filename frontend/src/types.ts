@@ -1,4 +1,4 @@
-type Card =
+export type Card =
   // TREASURE CARDS
   | "Copper"
   | "Silver"
@@ -37,13 +37,13 @@ type Card =
   | "Witch"
   | "Artisan";
 
-type Kingdom = Card[];
+export type Kingdom = Card[];
 
-type CreateGameRequest = {
+export type CreateGameRequest = {
   kingdom: Kingdom;
   num_players: number;
 };
 
-type CreateGameResponse = {
+export type CreateGameResponse = {
   key: string;
 };

@@ -1,33 +1,12 @@
 "use client";
-
+import CreateGame from "@/components/CreateGame";
 import { createGame } from "@/game";
 
 export default function Home() {
   return (
     <div>
-      Hello
-      <button
-        onClick={(e) => {
-          e.preventDefault();
-          createGame({
-            kingdom: [
-              "Cellar",
-              "Chapel",
-              "Moat",
-              "Harbinger",
-              "Merchant",
-              "Vassal",
-              "Village",
-              "Workshop",
-              "Bureaucrat",
-              "Militia",
-            ],
-            num_players: 2,
-          }).then((resp) => console.log(resp));
-        }}
-      >
-        Click
-      </button>
+      <div className="text-center text-3xl my-4">DominAI</div>
+      <CreateGame onSubmit={({ key }) => alert(key)} />
     </div>
   );
 }
