@@ -28,6 +28,7 @@ const NumPlayersSelector: React.FC<{
             <Listbox.Option
               value={n}
               className="cursor-pointer px-4 py-2 rounded transition-colors hover:bg-gray-100"
+              key={n}
             >
               {n} Players
             </Listbox.Option>
@@ -38,7 +39,7 @@ const NumPlayersSelector: React.FC<{
   );
 };
 
-const kindgomCards: Card[] = [
+const kingdomCards: Card[] = [
   "Gardens",
   "Cellar",
   "Chapel",
@@ -70,7 +71,7 @@ const kindgomCards: Card[] = [
 function randomKingdom(): Card[] {
   const kingdom: Card[] = [];
   while (kingdom.length < 10) {
-    const card = kindgomCards[Math.floor(Math.random() * kindgomCards.length)];
+    const card = kingdomCards[Math.floor(Math.random() * kingdomCards.length)];
     if (!kingdom.includes(card)) {
       kingdom.push(card);
     }
@@ -91,7 +92,7 @@ const KingdomSelector: React.FC<{
           </Menu.Button>
           <MenuTransition>
             <Menu.Items className="absolute top-4 left-4 z-10 bg-white rounded shadow h-96 overflow-y-auto">
-              {kindgomCards.map((card) => {
+              {kingdomCards.map((card, key) => {
                 const onClick = kingdom.includes(card)
                   ? undefined
                   : () => {
@@ -107,6 +108,7 @@ const KingdomSelector: React.FC<{
                     }`}
                     onClick={onClick}
                     disabled={!onClick}
+                    key={key}
                   >
                     {card}
                   </Menu.Item>
@@ -124,7 +126,7 @@ const CreateGame: React.FC<{
   onSubmit: (createGameResponse: CreateGameResponse) => void;
 }> = ({ onSubmit }) => {
   const [numPlayers, setNumPlayers] = useState<number>(2);
-  const [kingdom, setKingdom] = useState<Card[]>(randomKingdom());
+  const [kingdom, setKingdom] = useState<Card[]>(kingdomCards.slice(0, 10));
   const onCreateGame = () => {
     createGame({
       num_players: numPlayers,

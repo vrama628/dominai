@@ -1,12 +1,15 @@
 "use client";
 import CreateGame from "@/components/CreateGame";
 import { createGame } from "@/game";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
+  const router = useRouter();
   return (
-    <div>
-      <div className="text-center text-3xl my-4">DominAI</div>
-      <CreateGame onSubmit={({ key }) => alert(key)} />
-    </div>
+    <CreateGame
+      onSubmit={({ key }) => {
+        router.push(`/game/${key}`);
+      }}
+    />
   );
 }

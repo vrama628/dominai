@@ -39,6 +39,12 @@ export type Card =
 
 export type Kingdom = Card[];
 
+export type Player = {
+  name: string;
+};
+
+export type Supply = { [card in Card]: number };
+
 export type CreateGameRequest = {
   kingdom: Kingdom;
   num_players: number;
@@ -47,3 +53,16 @@ export type CreateGameRequest = {
 export type CreateGameResponse = {
   key: string;
 };
+
+export type GameStateResponse =
+  | ["PreStart", { num_players: number; kingdom: Kingdom; players: Player[] }]
+  | [
+      "Turn",
+      {
+        kingdom: Kingdom;
+        supply: Supply;
+        trash: Card[];
+        current_player: Player;
+        next_players: Player[];
+      }
+    ];

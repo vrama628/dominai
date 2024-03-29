@@ -32,13 +32,14 @@ let join_game (request : Dream.request) : Dream.response Lwt.t =
   let game_and_username_opt =
     let open Option.Let_syntax in
     let%bind game = Hashtbl.find games (Dream.param request "game") in
-    let%bind username = Dream.query request "name" in
+    let username = Dream.param request "name" in
     return (game, username)
   in
   match game_and_username_opt with
   | None -> Dream.json ~status:`Bad_Request "null"
   | Some (game, name) -> Dream.websocket (Game.add_player game name)
 
+(* TODO: spectate websocket *)
 let game_state (request : Dream.request) : Dream.response Lwt.t =
   match Hashtbl.find games (Dream.param request "game") with
   | None -> Dream.json ~status:`Not_Found "null"
@@ -49,7 +50,7 @@ let router : Dream.handler =
     [
       Dream.post "/game" create_game;
       Dream.get "/game/:game/state" game_state;
-      Dream.get "/join/:game" join_game;
+      Dream.get "/join/:game/as/:name" join_game;
     ]
 
 let cors_middleware (handler : Dream.handler) (request : Dream.request) :

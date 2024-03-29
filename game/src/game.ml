@@ -832,7 +832,7 @@ open CurrentPlayer
 type kingdom = Card.t list [@@deriving yojson]
 
 type turn = {
-  kingdom : Card.t list;
+  kingdom : kingdom;
   supply : Supply.t;
   trash : Card.t list;
   current_player : CurrentPlayer.t;
@@ -998,7 +998,6 @@ let rec play_card ~(turn : turn) ~(card : Card.t) ~(data : data) :
     turn errorable =
   let%bind current_player = CurrentPlayer.play_card card turn.current_player in
   match card with
-  (* we could error when people try to play victory cards but we'll just noop *)
   | Card.Estate | Card.Duchy | Card.Province | Card.Gardens | Card.Curse ->
     error "You cannot play victory cards."
   | Card.Copper ->

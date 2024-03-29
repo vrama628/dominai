@@ -1,4 +1,8 @@
-import { CreateGameRequest, CreateGameResponse } from "./types";
+import {
+  CreateGameRequest,
+  CreateGameResponse,
+  GameStateResponse,
+} from "./types";
 
 export async function createGame(
   createGameRequest: CreateGameRequest
@@ -11,4 +15,13 @@ export async function createGame(
     body: JSON.stringify(createGameRequest),
   });
   return await response.json();
+}
+
+export async function getGameState(key: string): Promise<GameStateResponse> {
+  const response = await fetch(`/api/game/${key}/state`);
+  return await response.json();
+}
+
+export function joinGame(key: string, username: string): WebSocket {
+  return new WebSocket(`ws://localhost:3000/api/join/${key}/as/${username}`);
 }
