@@ -42,7 +42,11 @@ const JoinAndPlayGame: React.FC<{ id: string }> = ({ id }) => {
             <button
               onClick={(e) => {
                 e.preventDefault();
-                setSocket(joinGame(id, username));
+                const socket = joinGame(id, username);
+                setSocket(socket);
+                socket.addEventListener("message", (event) => {
+                  console.log("messsage", event);
+                });
               }}
             >
               Join Game
