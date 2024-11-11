@@ -34,7 +34,7 @@ export default function RootLayout({
             href="/docs"
             className="text-lg rounded-lg px-4 py-2 transition-colors hover:bg-gray-300"
           >
-            Documentation
+            API
           </Link>
           <a
             href="https://github.com/vrama628/dominai"

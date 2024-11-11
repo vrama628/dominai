@@ -1,5 +1,5 @@
-- Get docs page to show up
 - Confirm that creating a game and interacting with the game server works
 - Move as much of the frontend into server components and actions as possible
   - e.g. "create game" screen could hit a server action instead of a client-side fetch and router.push.
     that could allow us to remove the CORS weirdness from the game server
+  - remove CORS middleware from game server; use Next.js as reverse proxy
